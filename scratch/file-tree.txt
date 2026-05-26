@@ -1,0 +1,217 @@
+nextsync/
+├── .env.example
+├── .env.local
+├── .eslintrc.json
+├── app/
+│   ├── admin/
+│   │   ├── config/
+│   │   │   ├── page.tsx
+│   │   ├── dashboard/
+│   │   │   ├── page.tsx
+│   │   ├── events/
+│   │   │   ├── page.tsx
+│   │   ├── photos/
+│   │   │   ├── page.tsx
+│   │   ├── reject-queue/
+│   │   │   ├── page.tsx
+│   │   ├── users/
+│   │   │   ├── page.tsx
+│   ├── api/
+│   │   ├── admin/
+│   │   │   ├── config/
+│   │   │   │   ├── route.ts
+│   │   │   ├── events/
+│   │   │   │   ├── route.ts
+│   │   │   │   ├── [id]/
+│   │   │   │   │   ├── close-upload/
+│   │   │   │   │   │   ├── route.ts
+│   │   │   │   │   ├── create-folder/
+│   │   │   │   │   │   ├── route.ts
+│   │   │   │   │   ├── sync/
+│   │   │   │   │   │   ├── route.ts
+│   │   │   │   │   ├── sync-status/
+│   │   │   │   │   │   ├── route.ts
+│   │   │   ├── photos/
+│   │   │   │   ├── route.ts
+│   │   │   ├── seasons/
+│   │   │   │   ├── route.ts
+│   │   │   ├── stats/
+│   │   │   │   ├── route.ts
+│   │   │   ├── users/
+│   │   │   │   ├── route.ts
+│   │   ├── auth/
+│   │   │   ├── [...nextauth]/
+│   │   │   │   ├── route.ts
+│   │   ├── cron/
+│   │   │   ├── process/
+│   │   │   │   ├── route.ts
+│   │   │   ├── sync/
+│   │   │   │   ├── route.ts
+│   │   ├── events/
+│   │   │   ├── route.ts
+│   │   ├── face/
+│   │   │   ├── enroll/
+│   │   │   │   ├── route.ts
+│   │   │   ├── search/
+│   │   │   │   ├── route.ts
+│   │   ├── photographer/
+│   │   │   ├── sync-stats/
+│   │   │   │   ├── route.ts
+│   │   ├── photos/
+│   │   │   ├── proxy/
+│   │   │   │   ├── route.ts
+│   │   │   ├── route.ts
+│   │   │   ├── [id]/
+│   │   │   │   ├── route.ts
+│   │   ├── register/
+│   │   │   ├── route.ts
+│   │   ├── seasons/
+│   │   │   ├── route.ts
+│   │   ├── upload/
+│   │   │   ├── route.ts
+│   │   │   ├── trigger/
+│   │   │   │   ├── route.ts
+│   ├── auth/
+│   │   ├── login/
+│   │   │   ├── page.tsx
+│   │   ├── photographer/
+│   │   │   ├── page.tsx
+│   │   ├── register/
+│   │   │   ├── page.tsx
+│   ├── gallery/
+│   │   ├── page.tsx
+│   ├── globals.css
+│   ├── layout.tsx
+│   ├── loading.tsx
+│   ├── my-photos/
+│   │   ├── page.tsx
+│   ├── my-uploads/
+│   │   ├── page.tsx
+│   ├── page.tsx
+│   ├── upload/
+│   │   ├── page.tsx
+├── auth.config.ts
+├── components/
+│   ├── admin/
+│   │   ├── BatchActions.tsx
+│   │   ├── RejectQueue.tsx
+│   │   ├── StatsCards.tsx
+│   │   ├── SyncStatusBadge.tsx
+│   │   ├── ThresholdSliders.tsx
+│   ├── auth/
+│   │   ├── FaceEnrollment.tsx
+│   ├── gallery/
+│   │   ├── EventSelector.tsx
+│   │   ├── FaceScanModal.tsx
+│   │   ├── FaceSearchBar.tsx
+│   │   ├── FilterBar.tsx
+│   │   ├── PhotoCard.tsx
+│   │   ├── PhotoEditorModal.tsx
+│   │   ├── PhotoGrid.tsx
+│   │   ├── PhotoModal.tsx
+│   │   ├── SeasonBanner.tsx
+│   │   ├── SeasonSelector.tsx
+│   ├── shared/
+│   │   ├── BackgroundEffects.tsx
+│   │   ├── FeatureCard.tsx
+│   │   ├── LoadingGrid.tsx
+│   │   ├── Navbar.tsx
+│   │   ├── NextsyncLogo.tsx
+│   │   ├── NextsyncWordmark.tsx
+│   │   ├── TeamColorDot.tsx
+├── DEPLOY.md
+├── drizzle/
+│   ├── migrations/
+│   │   ├── 0001_initial.sql
+│   │   ├── 0002_remove_teams.sql
+│   │   ├── 0003_add_events.sql
+│   │   ├── 0004_drive_folders.sql
+│   │   ├── 0005_processing_jobs.sql
+│   │   ├── 0006_download_url.sql
+│   │   ├── 0007_watermark_enabled.sql
+│   ├── schema.ts
+├── drizzle.config.ts
+├── instrumentation.ts
+├── lib/
+│   ├── aiTuner.ts
+│   ├── auth.ts
+│   ├── db.ts
+│   ├── drive.ts
+│   ├── face.ts
+│   ├── pipeline.ts
+│   ├── r2.ts
+│   ├── utils.ts
+├── LOCALRUN.md
+├── middleware.ts
+├── next-env.d.ts
+├── next.config.mjs
+├── package-lock.json
+├── package.json
+├── pipeline/
+│   ├── 01_quality_filter.py
+│   ├── 02_face_index.py
+│   ├── 03_thumbnail_gen.py
+│   ├── build/
+│   │   ├── NextSync Pipeline/
+│   │   │   ├── Analysis-00.toc
+│   │   │   ├── base_library.zip
+│   │   │   ├── EXE-00.toc
+│   │   │   ├── localpycs/
+│   │   │   │   ├── pyimod01_archive.pyc
+│   │   │   │   ├── pyimod02_importers.pyc
+│   │   │   │   ├── pyimod03_ctypes.pyc
+│   │   │   │   ├── pyimod04_pywin32.pyc
+│   │   │   │   ├── struct.pyc
+│   │   │   ├── NextSync Pipeline.pkg
+│   │   │   ├── PKG-00.toc
+│   │   │   ├── PYZ-00.pyz
+│   │   │   ├── PYZ-00.toc
+│   │   │   ├── warn-NextSync Pipeline.txt
+│   │   │   ├── xref-NextSync Pipeline.html
+│   ├── build_app.bat
+│   ├── desktop_app.py
+│   ├── NextSync Pipeline.spec
+│   ├── README.md
+│   ├── requirements.txt
+│   ├── run_all.ipynb
+│   ├── run_pipeline.py
+│   ├── __pycache__/
+│   │   ├── 02_face_index.cpython-38.pyc
+│   │   ├── desktop_app.cpython-38.pyc
+│   │   ├── run_pipeline.cpython-38.pyc
+├── postcss.config.js
+├── public/
+│   ├── icon.png
+│   ├── models/
+│   │   ├── face_landmark_68_model-shard1
+│   │   ├── face_landmark_68_model-weights_manifest.json
+│   │   ├── face_recognition_model-shard1
+│   │   ├── face_recognition_model-shard2
+│   │   ├── face_recognition_model-weights_manifest.json
+│   │   ├── ssd_mobilenetv1_model-shard1
+│   │   ├── ssd_mobilenetv1_model-shard2
+│   │   ├── ssd_mobilenetv1_model-weights_manifest.json
+├── scratch/
+│   ├── analyze-embeddings.ts
+│   ├── analyze-project.ts
+│   ├── check-db-status.ts
+│   ├── list-users.ts
+│   ├── read-config.ts
+│   ├── test-distances.ts
+│   ├── test-preprocessing-diff.ts
+│   ├── test-search.ts
+│   ├── update-db-config.ts
+├── scripts/
+│   ├── download-models.js
+│   ├── enable-vector.ts
+│   ├── migrate-drive.ts
+│   ├── process-all-pending.ts
+│   ├── run-migration.ts
+│   ├── seed-admin.ts
+│   ├── setup-local.js
+├── tailwind.config.ts
+├── test-embeddings.ts
+├── tsconfig.json
+├── tsconfig.tsbuildinfo
+├── velvety-folder-466404-n1-91082791b38c.json
+├── vercel.json

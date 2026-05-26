@@ -1,0 +1,50 @@
+{
+  "name": "nextsync",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "seed:admin": "npx tsx scripts/seed-admin.ts",
+    "setup": "node scripts/setup-local.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.588.0",
+    "@neondatabase/serverless": "^0.9.3",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@vladmandic/face-api": "^1.7.12",
+    "bcryptjs": "^2.4.3",
+    "clsx": "^2.1.1",
+    "drizzle-orm": "^0.30.10",
+    "face-api.js": "^0.22.2",
+    "googleapis": "latest",
+    "lucide-react": "^0.379.0",
+    "next": "14.2.3",
+    "next-auth": "5.0.0-beta.25",
+    "pg": "^8.11.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "sharp": "^0.33.3",
+    "tailwind-merge": "^2.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20.12.12",
+    "@types/pg": "^8.11.6",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.19",
+    "drizzle-kit": "^0.21.4",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.3",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.3",
+    "tsx": "^4.11.0",
+    "typescript": "^5.4.5"
+  }
+}

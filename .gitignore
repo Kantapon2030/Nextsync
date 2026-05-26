@@ -1,0 +1,6 @@
+node_modules/
+.next/
+.env.local
+out/
+build/
+velvety-folder-466404-n1-91082791b38c.json
