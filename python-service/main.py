@@ -3,6 +3,7 @@ import io
 import os
 import gc
 import traceback
+import asyncio
 
 # ─── TensorFlow CPU Memory/Threading Optimization ───────────────────────────
 # Set environment variables BEFORE importing deepface / tensorflow
@@ -98,6 +99,10 @@ def get_embedding(img: np.ndarray, detector: str = DETECTOR) -> list:
     return best["embedding"]  # list[float] of length 512
 
 
+# Global lock to serialize heavy face operations, preventing concurrent memory spikes on low-RAM hosts (like Render Free tier).
+face_lock = asyncio.Lock()
+
+
 # ─── Health check ────────────────────────────────────────────
 @app.get("/")
 async def health():
@@ -117,39 +122,41 @@ async def enroll(
     Receive 1–3 face images, return mean ArcFace 512-dim embedding.
     Used for user registration/re-enrollment.
     """
-    embeddings = []
+    async with face_lock:
+        gc.collect()
+        embeddings = []
 
-    # Use a lighter detector ('opencv') for enrollment to fit within Render Free tier (512MB RAM).
-    # Enrollment is always close-up frontal face, so opencv is extremely fast and sufficient.
-    for upload in [image1, image2, image3]:
-        if upload is None:
-            continue
-        raw = await upload.read()
-        img = image_from_bytes(raw)
-        try:
-            emb = get_embedding(img, detector="opencv")
-            embeddings.append(emb)
-        except HTTPException:
-            pass  # Skip images where no face detected
+        # Use a lighter detector ('opencv') for enrollment to fit within Render Free tier (512MB RAM).
+        # Enrollment is always close-up frontal face, so opencv is extremely fast and sufficient.
+        for upload in [image1, image2, image3]:
+            if upload is None:
+                continue
+            raw = await upload.read()
+            img = image_from_bytes(raw)
+            try:
+                emb = get_embedding(img, detector="opencv")
+                embeddings.append(emb)
+            except HTTPException:
+                pass  # Skip images where no face detected
 
-    # Clean up memory immediately after processing
-    gc.collect()
+        # Clean up memory immediately after processing
+        gc.collect()
 
-    if not embeddings:
-        raise HTTPException(
-            status_code=400,
-            detail="ตรวจไม่พบใบหน้าในรูปที่ส่งมาทั้งหมด กรุณาถ่ายใหม่ในที่แสงสว่าง",
-        )
+        if not embeddings:
+            raise HTTPException(
+                status_code=400,
+                detail="ตรวจไม่พบใบหน้าในรูปที่ส่งมาทั้งหมด กรุณาถ่ายใหม่ในที่แสงสว่าง",
+            )
 
-    # Average embeddings from multiple angles for better accuracy
-    mean_emb = np.mean(embeddings, axis=0).tolist()
+        # Average embeddings from multiple angles for better accuracy
+        mean_emb = np.mean(embeddings, axis=0).tolist()
 
-    return {
-        "embedding": mean_emb,
-        "dim": len(mean_emb),
-        "faces_detected": len(embeddings),
-        "model": MODEL_NAME,
-    }
+        return {
+            "embedding": mean_emb,
+            "dim": len(mean_emb),
+            "faces_detected": len(embeddings),
+            "model": MODEL_NAME,
+        }
 
 
 # ─── Endpoint 2: Extract ─────────────────────────────────────
@@ -161,41 +168,43 @@ async def extract(request: Request, image: UploadFile = File(...)):
     Used by the pipeline to index event photos.
     Returns list of { embedding, bbox, confidence }.
     """
-    raw = await image.read()
-    img = image_from_bytes(raw)
-
-    try:
-        results = DeepFace.represent(
-            img_path=img,
-            model_name=MODEL_NAME,
-            detector_backend=DETECTOR,
-            enforce_detection=False,  # Don't throw if no faces found
-            align=True,
-        )
-    except Exception as e:
-        traceback.print_exc()
+    async with face_lock:
         gc.collect()
-        return {"faces": [], "count": 0, "error": str(e)}
+        raw = await image.read()
+        img = image_from_bytes(raw)
 
-    # Clean up memory immediately after processing
-    gc.collect()
+        try:
+            results = DeepFace.represent(
+                img_path=img,
+                model_name=MODEL_NAME,
+                detector_backend=DETECTOR,
+                enforce_detection=False,  # Don't throw if no faces found
+                align=True,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            gc.collect()
+            return {"faces": [], "count": 0, "error": str(e)}
 
-    if not results:
-        return {"faces": [], "count": 0}
+        # Clean up memory immediately after processing
+        gc.collect()
 
-    faces = []
-    for r in results:
-        # Filter out very low confidence detections
-        conf = r.get("face_confidence", 0.0)
-        if conf < 0.5 and conf != 0.0:
-            continue
-        faces.append({
-            "embedding": r["embedding"],   # 512-dim list
-            "bbox": r["facial_area"],       # {x, y, w, h}
-            "confidence": conf,
-        })
+        if not results:
+            return {"faces": [], "count": 0}
 
-    return {"faces": faces, "count": len(faces)}
+        faces = []
+        for r in results:
+            # Filter out very low confidence detections
+            conf = r.get("face_confidence", 0.0)
+            if conf < 0.5 and conf != 0.0:
+                continue
+            faces.append({
+                "embedding": r["embedding"],   # 512-dim list
+                "bbox": r["facial_area"],       # {x, y, w, h}
+                "confidence": conf,
+            })
+
+        return {"faces": faces, "count": len(faces)}
 
 
 # ─── Endpoint 3: Compare (debug/test) ────────────────────────
@@ -207,30 +216,34 @@ async def compare(
 ):
     """Compare two face images. For debugging and threshold tuning."""
     verify_secret(request)
-    raw1 = await image1.read()
-    raw2 = await image2.read()
-    img1 = image_from_bytes(raw1)
-    img2 = image_from_bytes(raw2)
+    async with face_lock:
+        gc.collect()
+        raw1 = await image1.read()
+        raw2 = await image2.read()
+        img1 = image_from_bytes(raw1)
+        img2 = image_from_bytes(raw2)
 
-    try:
-        result = DeepFace.verify(
-            img1_path=img1,
-            img2_path=img2,
-            model_name=MODEL_NAME,
-            detector_backend=DETECTOR,
-            distance_metric=DISTANCE_METRIC,
-            enforce_detection=True,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        try:
+            result = DeepFace.verify(
+                img1_path=img1,
+                img2_path=img2,
+                model_name=MODEL_NAME,
+                detector_backend=DETECTOR,
+                distance_metric=DISTANCE_METRIC,
+                enforce_detection=True,
+            )
+        except Exception as e:
+            gc.collect()
+            raise HTTPException(status_code=400, detail=str(e))
 
-    return {
-        "verified": result["verified"],
-        "distance": result["distance"],      # cosine distance (lower = more similar)
-        "threshold": result["threshold"],    # default ~0.40 for ArcFace cosine
-        "model": MODEL_NAME,
-        "metric": DISTANCE_METRIC,
-    }
+        gc.collect()
+        return {
+            "verified": result["verified"],
+            "distance": result["distance"],      # cosine distance (lower = more similar)
+            "threshold": result["threshold"],    # default ~0.40 for ArcFace cosine
+            "model": MODEL_NAME,
+            "metric": DISTANCE_METRIC,
+        }
 
 
 if __name__ == "__main__":
