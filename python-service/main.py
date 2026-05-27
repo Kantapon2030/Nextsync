@@ -1,3 +1,11 @@
+import sys
+import io
+
+# Force stdout and stderr to use UTF-8 encoding on Windows to prevent UnicodeEncodeErrors with emojis
+if sys.platform.startswith('win'):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from deepface import DeepFace

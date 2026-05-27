@@ -1,10 +1,10 @@
 // components/auth/FaceEnrollment.tsx
-// 3-angle face capture UI using pure camera capture (no face-api.js).
+// 3-angle face capture UI using camera capture with automatic countdown capture option.
 // Sends images directly to /api/face/enroll which delegates to Python ArcFace service.
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { CheckCircle2, AlertCircle, RefreshCw, Camera } from "lucide-react";
+import { CheckCircle2, AlertCircle, RefreshCw, Camera, Sparkles } from "lucide-react";
 
 type Angle = "ตรง" | "ซ้าย" | "ขวา";
 
@@ -16,7 +16,6 @@ const ANGLE_HINT: Record<Angle, string> = {
   ขวา: "หันหน้าเล็กน้อยไปทางขวา (~30°)",
 };
 
-// Each angle has its own accent color for visual feedback
 const ANGLE_COLOR: Record<Angle, string> = {
   ตรง: "var(--accent-blue)",
   ซ้าย: "var(--accent-yellow)",
@@ -38,6 +37,10 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [camReady, setCamReady] = useState(false);
+
+  // Auto scan states
+  const [autoScan, setAutoScan] = useState(true);
+  const [countdown, setCountdown] = useState<number | null>(null);
 
   // Start camera on mount, stop on unmount
   useEffect(() => {
@@ -104,7 +107,7 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
   }, [step, camReady]);
 
   // Submit all captured images to /api/face/enroll
-  const handleSubmit = async () => {
+  const handleSubmit = useCallback(async () => {
     if (captures.length === 0) return;
     setUploading(true);
     setError(null);
@@ -125,7 +128,42 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
       setError(err.message ?? "เกิดข้อผิดพลาด กรุณาลองใหม่");
       setUploading(false);
     }
-  };
+  }, [captures, onComplete]);
+
+  // Auto Scan Countdown Logic
+  useEffect(() => {
+    if (!autoScan || !camReady || step >= ANGLES.length || uploading) {
+      setCountdown(null);
+      return;
+    }
+
+    // Reset countdown to 3 when entering a new step
+    setCountdown(3);
+
+    const timer = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          clearInterval(timer);
+          // Trigger capture in the next tick
+          setTimeout(() => {
+            captureFrame();
+          }, 50);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [step, autoScan, camReady, uploading, captureFrame]);
+
+  // Auto Submit Logic
+  useEffect(() => {
+    if (autoScan && step === ANGLES.length && captures.length === ANGLES.length && !uploading && !error) {
+      handleSubmit();
+    }
+  }, [step, captures, autoScan, uploading, error, handleSubmit]);
 
   const done = step >= ANGLES.length;
   const currentAngle = ANGLES[Math.min(step, ANGLES.length - 1)];
@@ -201,24 +239,55 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
           />
         )}
 
-        {/* Face guide oval */}
+        {/* Face guide oval with rotational helper animations */}
         {!done && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div
-              className="w-[160px] h-[210px] rounded-[50%] border-2 border-dashed transition-colors duration-300"
-              style={{ borderColor: `${accentColor}80` }}
-            />
+              className="relative w-[160px] h-[210px] rounded-[50%] border-2 border-dashed transition-all duration-500 flex items-center justify-center"
+              style={{
+                borderColor: `${accentColor}80`,
+                transform:
+                  currentAngle === "ซ้าย"
+                    ? "translateX(-30px) rotate(-10deg)"
+                    : currentAngle === "ขวา"
+                    ? "translateX(30px) rotate(10deg)"
+                    : "none",
+              }}
+            >
+              {currentAngle === "ซ้าย" && (
+                <div className="absolute -left-12 bg-black/75 text-white border border-slate-700 px-2 py-1 rounded text-[10px] font-bold animate-bounce shadow">
+                  ← หันซ้าย
+                </div>
+              )}
+              {currentAngle === "ขวา" && (
+                <div className="absolute -right-12 bg-black/75 text-white border border-slate-700 px-2 py-1 rounded text-[10px] font-bold animate-bounce shadow">
+                  หันขวา →
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Countdown overlay for Auto Scan */}
+        {countdown !== null && !done && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/35 backdrop-blur-[2px] transition-all duration-300">
+            <div className="relative flex items-center justify-center h-28 w-28 rounded-full border-4 border-white bg-black/50 shadow-[0_0_20px_rgba(255,255,255,0.4)] animate-pulse">
+              <span className="text-5xl font-black text-white">{countdown}</span>
+            </div>
+            <span className="mt-4 text-xs font-semibold text-white bg-black/60 px-3 py-1.5 rounded-full border border-slate-800/80 shadow">
+              กรุณานิ่งและมองกล้อง
+            </span>
           </div>
         )}
 
         {/* Bottom status bar */}
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-4 py-3">
+        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent px-4 py-3.5">
           <p
             className="text-xs font-semibold text-center"
             style={{ color: done ? "var(--accent-green)" : accentColor }}
           >
             {done
-              ? "✓ บันทึกครบทุกมุมแล้ว กดยืนยันเพื่อดำเนินการ"
+              ? "✓ บันทึกครบทุกมุมแล้ว กำลังดำเนินการ..."
               : camReady
               ? ANGLE_HINT[currentAngle]
               : "กำลังเปิดกล้อง..."}
@@ -232,6 +301,36 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
             <p className="text-sm font-medium text-[var(--text)]">{error}</p>
           </div>
         )}
+      </div>
+
+      {/* Auto Scan Toggle Switch */}
+      <div className="flex items-center justify-between w-full bg-slate-900/50 border border-slate-800/80 rounded-2xl px-4 py-3 backdrop-blur-sm shadow">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs font-bold text-[var(--text)] flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5 text-[var(--accent-blue)]" />
+            สแกนอัตโนมัติ (Auto Scan)
+          </span>
+          <span className="text-[10px] text-[var(--text3)]">
+            ระบบจะนับถอยหลังและสแกนใบหน้าทุกมุมให้โดยไม่ต้องกดปุ่ม
+          </span>
+        </div>
+        <button
+          onClick={() => {
+            setAutoScan(!autoScan);
+            if (autoScan) {
+              setCountdown(null);
+            }
+          }}
+          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+            autoScan ? "bg-[var(--accent-blue)]" : "bg-slate-800"
+          }`}
+        >
+          <span
+            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+              autoScan ? "translate-x-5" : "translate-x-0"
+            }`}
+          />
+        </button>
       </div>
 
       {/* Thumbnail strip of captured images */}
@@ -275,17 +374,20 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
         {!done ? (
           <button
             onClick={captureFrame}
-            disabled={!camReady}
+            disabled={!camReady || autoScan}
             className="flex-1 py-3.5 font-semibold rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
-              background: camReady ? `linear-gradient(135deg, ${accentColor}, ${accentColor}cc)` : undefined,
-              backgroundColor: camReady ? undefined : "var(--surface)",
-              color: camReady ? (currentAngle === "ตรง" ? "#fff" : "#000") : "var(--text3)",
+              background: camReady && !autoScan ? `linear-gradient(135deg, ${accentColor}, ${accentColor}cc)` : undefined,
+              backgroundColor: camReady && !autoScan ? undefined : "var(--surface)",
+              color: camReady && !autoScan ? (currentAngle === "ตรง" ? "#fff" : "#000") : "var(--text3)",
             }}
           >
             <Camera className="h-4 w-4" />
             <span>
-              📸 ถ่ายหน้า{currentAngle} ({step + 1}/3)
+              {autoScan 
+                ? `กำลังสแกนหน้า${currentAngle}อัตโนมัติ...`
+                : `📸 ถ่ายหน้า${currentAngle} (${step + 1}/3)`
+              }
             </span>
           </button>
         ) : (

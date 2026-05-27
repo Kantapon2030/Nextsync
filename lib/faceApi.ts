@@ -8,7 +8,7 @@ const FACE_API_SECRET = process.env.FACE_API_SECRET ?? "";
 /** Optional auth header for inter-service requests */
 function authHeaders(): Record<string, string> {
   if (!FACE_API_SECRET) return {};
-  return { "X-API-Secret": FACE_API_SECRET };
+  return { Authorization: `Bearer ${FACE_API_SECRET}` };
 }
 
 // ── Enroll ──────────────────────────────────────────────────────────────────
