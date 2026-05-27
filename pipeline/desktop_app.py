@@ -453,7 +453,7 @@ class NextSyncApp(tk.Tk):
         self.progress_label.config(text="กำลังประมวลผล...")
 
         self.log("─" * 60)
-        self.log(f"🚀 เริ่ม Pipeline | Workers={workers} | Folder={folder_id}", "info")
+        self.log(f"🚀 เริ่ม Pipeline | Workers={workers} | Folder={folder_id} | Event={cfg.get('event_id', '').strip() or 'Auto'}", "info")
 
         self.pipeline_thread = threading.Thread(
             target=self._run_pipeline_thread,
@@ -473,10 +473,12 @@ class NextSyncApp(tk.Tk):
             rp = importlib.import_module("run_pipeline")
             importlib.reload(rp)
 
+            event_id = self.config_data.get("event_id", "").strip() or None
             result = rp.run_pipeline(
                 service_account_path=sa_path,
                 folder_id=folder_id,
                 workers=workers,
+                event_id=event_id,
                 log_callback=lambda msg: self.log(msg),
                 stop_event=self.stop_event
             )

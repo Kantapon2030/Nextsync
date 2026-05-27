@@ -161,10 +161,10 @@ def process_single_photo(
             os.remove(local_temp_path)
 
 
-def run_pipeline(service_account_path, folder_id=None, workers=4, log_callback=None, stop_event=None):
+def run_pipeline(service_account_path, folder_id=None, workers=4, log_callback=None, stop_event=None, event_id=None, timeslot=None):
     """
     Main pipeline:
-    - Scan Drive folder for trigger JSON files
+    - Scan Drive folder for trigger JSON files (or process directly if event_id is specified)
     - Process all images concurrently with ThreadPoolExecutor
     """
     database_url = os.environ.get("DATABASE_URL", "")
@@ -217,40 +217,42 @@ def run_pipeline(service_account_path, folder_id=None, workers=4, log_callback=N
                         break
 
     log(f"📁 Scanning Drive folder {folder_id}...")
+    
+    # Try to find trigger files anyway for cleanup/sync purposes
+    trigger_files = []
     try:
         results = gdrive_service.files().list(
             q=f"'{folder_id}' in parents and name contains 'trigger_' and mimeType = 'application/json' and trashed = false",
             fields="files(id, name)"
         ).execute()
+        trigger_files = results.get("files", [])
     except Exception as e:
-        log(f"❌ Error scanning folder: {e}")
-        conn.close()
-        return {"processed": 0, "errors": 0}
+        log(f"⚠️ Error scanning for trigger files: {e}")
 
-    trigger_files = results.get("files", [])
-    event_id = "day1"
-    timeslot = None
+    # If no event_id was passed, try to parse from the first trigger file
+    if not event_id:
+        if not trigger_files:
+            log("ℹ️ No trigger file found. Pipeline idle.")
+            conn.close()
+            return {"processed": 0, "errors": 0}
 
-    if not trigger_files:
-        log("ℹ️ No trigger file found. Pipeline idle.")
-        conn.close()
-        return {"processed": 0, "errors": 0}
-
-    # Parse trigger file
-    t_file = trigger_files[0]
-    local_trigger_path = f"temp_{t_file['id']}.json"
-    try:
-        download_file_from_drive(gdrive_service, t_file["id"], local_trigger_path)
-        with open(local_trigger_path, "r", encoding="utf-8") as f:
-            trigger_data = json.load(f)
-        event_id = trigger_data.get("eventId", event_id)
-        timeslot = trigger_data.get("timeslot", None)
-        log(f"📋 Trigger: eventId={event_id}, timeslot={timeslot}")
-    except Exception as e:
-        log(f"⚠️ Error reading trigger, using defaults: {e}")
-    finally:
-        if os.path.exists(local_trigger_path):
-            os.remove(local_trigger_path)
+        t_file = trigger_files[0]
+        local_trigger_path = f"temp_{t_file['id']}.json"
+        try:
+            download_file_from_drive(gdrive_service, t_file["id"], local_trigger_path)
+            with open(local_trigger_path, "r", encoding="utf-8") as f:
+                trigger_data = json.load(f)
+            event_id = trigger_data.get("eventId", "day1")
+            timeslot = trigger_data.get("timeslot", None)
+            log(f"📋 Trigger file found: eventId={event_id}, timeslot={timeslot}")
+        except Exception as e:
+            log(f"⚠️ Error reading trigger, using defaults: {e}")
+            event_id = "day1"
+        finally:
+            if os.path.exists(local_trigger_path):
+                os.remove(local_trigger_path)
+    else:
+        log(f"📋 Direct processing mode: eventId={event_id}, timeslot={timeslot}")
 
     # Resolve season_id
     season_id = "default"
