@@ -48,13 +48,13 @@ def image_from_bytes(file_bytes: bytes) -> np.ndarray:
     return img
 
 
-def get_embedding(img: np.ndarray) -> list:
+def get_embedding(img: np.ndarray, detector: str = DETECTOR) -> list:
     """Extract ArcFace embedding from image (returns largest face)."""
     try:
         results = DeepFace.represent(
             img_path=img,
             model_name=MODEL_NAME,
-            detector_backend=DETECTOR,
+            detector_backend=detector,
             enforce_detection=True,
             align=True,
         )
@@ -92,13 +92,15 @@ async def enroll(
     """
     embeddings = []
 
+    # Use a lighter detector ('opencv') for enrollment to fit within Render Free tier (512MB RAM).
+    # Enrollment is always close-up frontal face, so opencv is extremely fast and sufficient.
     for upload in [image1, image2, image3]:
         if upload is None:
             continue
         raw = await upload.read()
         img = image_from_bytes(raw)
         try:
-            emb = get_embedding(img)
+            emb = get_embedding(img, detector="opencv")
             embeddings.append(emb)
         except HTTPException:
             pass  # Skip images where no face detected
