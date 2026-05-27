@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 # pipeline/02_face_index.py
-# Improved face detection with CLAHE preprocessing for heavy makeup support.
+# Calls the local or deployed Face API service (ArcFace 512-dim) for face indexing.
 
 import io
 import os
-import numpy as np
-from PIL import Image
-
-import face_recognition
+import requests
 import psycopg2
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -42,99 +39,45 @@ def download_file_from_drive(service, file_id, local_path):
     fh.close()
 
 
-def preprocess_image_for_detection(image_path: str) -> np.ndarray:
-    """
-    Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to improve
-    face detection accuracy for heavily made-up faces.
-    
-    The makeup changes local contrast which can fool standard detectors.
-    CLAHE normalizes local contrast without affecting color information.
-    """
-    try:
-        import cv2
-        img_bgr = cv2.imread(image_path)
-        if img_bgr is None:
-            raise ValueError("Cannot read image")
-
-        # Convert to LAB color space — only apply CLAHE to L channel
-        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
-        l_channel, a_channel, b_channel = cv2.split(lab)
-
-        # CLAHE on luminance only
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        l_clahe = clahe.apply(l_channel)
-
-        lab_clahe = cv2.merge((l_clahe, a_channel, b_channel))
-        img_enhanced = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
-
-        # Convert BGR → RGB for face_recognition
-        return cv2.cvtColor(img_enhanced, cv2.COLOR_BGR2RGB)
-
-    except ImportError:
-        # Fallback: PIL-based simple brightness boost
-        img = Image.open(image_path).convert("RGB")
-        img_array = np.array(img)
-        mean_lum = img_array.mean()
-        if mean_lum < 100:
-            # Dark image: boost brightness
-            boost = min(1.4, 100 / max(mean_lum, 1))
-            img_array = np.clip(img_array * boost, 0, 255).astype(np.uint8)
-        return img_array
-
-
 def index_photo_faces(image_path: str, _face_app=None):
     """
-    Detect faces and extract 128-dim embeddings compatible with face-api.js.
-    
-    Uses CLAHE preprocessing for better detection of heavily made-up faces.
-    Uses upsample_num_times=2 for better detection of small/angled faces.
+    Detect faces and extract 512-dim ArcFace embeddings by calling the face-api service.
     
     Returns: list of dicts with {bbox, embedding, confidence, face_index}
     """
-    # Try with CLAHE-preprocessed image first
+    face_api_url = os.environ.get("FACE_API_URL", "http://127.0.0.1:8000")
+    face_api_secret = os.environ.get("FACE_API_SECRET", "dev-secret-key-change-this-in-prod")
+    
+    headers = {}
+    if face_api_secret:
+        headers["Authorization"] = f"Bearer {face_api_secret}"
+        
     try:
-        enhanced_array = preprocess_image_for_detection(image_path)
+        with open(image_path, "rb") as f:
+            files = {"image": (os.path.basename(image_path), f, "image/jpeg")}
+            res = requests.post(f"{face_api_url}/extract", headers=headers, files=files, timeout=45)
+            
+        if res.status_code != 200:
+            print(f"[face_index] Face API returned status {res.status_code} for {os.path.basename(image_path)}: {res.text}")
+            return []
+            
+        data = res.json()
+        
+        # If there's an error key in the JSON response
+        if "error" in data and data["error"]:
+            print(f"[face_index] Face API error for {os.path.basename(image_path)}: {data['error']}")
+            return []
+            
+        faces = data.get("faces", [])
+        results = []
+        for i, face in enumerate(faces):
+            results.append({
+                "face_index": i,
+                "bbox": face["bbox"],
+                "embedding": face["embedding"],     # 512-dim ArcFace embedding
+                "confidence": face.get("confidence", 0.99),
+            })
+        return results
     except Exception as e:
-        print(f"Preprocessing failed, using original: {e}")
-        enhanced_array = face_recognition.load_image_file(image_path)
-
-    # upsample_num_times=2 improves detection of small faces, faces at angles,
-    # and faces with heavy makeup that alter edge patterns
-    face_locations = face_recognition.face_locations(
-        enhanced_array,
-        model="hog",
-        number_of_times_to_upsample=2
-    )
-
-    # If no faces found with enhanced image, try original
-    if not face_locations:
-        original = face_recognition.load_image_file(image_path)
-        face_locations = face_recognition.face_locations(
-            original,
-            model="hog",
-            number_of_times_to_upsample=2
-        )
-        if face_locations:
-            enhanced_array = original  # use original for encoding too
-
-    if not face_locations:
+        print(f"[face_index] Failed to connect to Face API at {face_api_url}: {e}")
         return []
-
-    face_encodings = face_recognition.face_encodings(enhanced_array, face_locations)
-    results = []
-
-    for i, (encoding, location) in enumerate(zip(face_encodings, face_locations)):
-        top, right, bottom, left = location
-        results.append({
-            "face_index": i,
-            "bbox": {
-                "x": float(left),
-                "y": float(top),
-                "w": float(right - left),
-                "h": float(bottom - top),
-            },
-            "embedding": encoding.tolist(),
-            "confidence": 0.99,
-        })
-
-    return results

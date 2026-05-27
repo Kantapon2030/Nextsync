@@ -27,6 +27,8 @@ DEFAULT_CONFIG = {
     "r2_secret_access_key": "",
     "r2_bucket_name": "",
     "r2_public_url": "",
+    "face_api_url": "http://127.0.0.1:8000",
+    "face_api_secret": "dev-secret-key-change-this-in-prod",
 }
 
 def load_env_local():
@@ -96,6 +98,10 @@ def load_config():
             cfg["r2_public_url"] = env["R2_PUBLIC_URL"]
         if "GOOGLE_DRIVE_FOLDER_ID" in env:
             cfg["folder_id"] = env["GOOGLE_DRIVE_FOLDER_ID"]
+        if "FACE_API_URL" in env:
+            cfg["face_api_url"] = env["FACE_API_URL"]
+        if "FACE_API_SECRET" in env:
+            cfg["face_api_secret"] = env["FACE_API_SECRET"]
 
     # Try to find Service Account JSON file in directory
     sa_path = find_service_account_json()
@@ -203,6 +209,8 @@ class NextSyncApp(tk.Tk):
         self._field_row(env_frame, "R2_SECRET_ACCESS_KEY:", "r2_secret_access_key", row=3, show_char="*")
         self._field_row(env_frame, "R2_BUCKET_NAME:", "r2_bucket_name", row=4)
         self._field_row(env_frame, "R2_PUBLIC_URL:", "r2_public_url", row=5)
+        self._field_row(env_frame, "FACE_API_URL:", "face_api_url", row=6)
+        self._field_row(env_frame, "FACE_API_SECRET:", "face_api_secret", row=7, show_char="*")
 
         # ── Controls ──
         ctrl_frame = tk.Frame(content, bg="#0d0f1e")
@@ -396,6 +404,10 @@ class NextSyncApp(tk.Tk):
             env_key = k.upper()
             if cfg.get(k):
                 os.environ[env_key] = cfg[k]
+        if cfg.get("face_api_url"):
+            os.environ["FACE_API_URL"] = cfg["face_api_url"]
+        if cfg.get("face_api_secret"):
+            os.environ["FACE_API_SECRET"] = cfg["face_api_secret"]
 
         sa_path = cfg.get("service_account_path", "").strip()
         folder_id = cfg.get("folder_id", "").strip()
