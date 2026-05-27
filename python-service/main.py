@@ -1,17 +1,39 @@
 import sys
 import io
+import os
+import gc
+
+# ─── TensorFlow CPU Memory/Threading Optimization ───────────────────────────
+# Set environment variables BEFORE importing deepface / tensorflow
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
 
 # Force stdout and stderr to use UTF-8 encoding on Windows to prevent UnicodeEncodeErrors with emojis
 if sys.platform.startswith('win'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
+try:
+    import tensorflow as tf
+    # Limit runtime threading for low-RAM containers
+    tf.config.threading.set_inter_op_parallelism_threads(1)
+    tf.config.threading.set_intra_op_parallelism_threads(1)
+    # Disable GPU memory pre-allocation (prevent GPU growth leaks if running on system with GPU)
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+except Exception:
+    pass
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from deepface import DeepFace
 import numpy as np
 import cv2
-import os
 
 FACE_API_SECRET = os.getenv("FACE_API_SECRET", "")
 
@@ -35,7 +57,10 @@ def verify_secret(request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 MODEL_NAME = "ArcFace"        # 512-dim, best accuracy
-DETECTOR = "retinaface"       # Best for angled/makeup faces
+# Default to 'ssd' on Render (512MB RAM) to avoid OOM crashes, otherwise use 'retinaface'
+is_render = os.getenv("RENDER", "false").lower() == "true"
+default_detector = "ssd" if is_render else "retinaface"
+DETECTOR = os.getenv("DETECTOR_BACKEND", default_detector)
 DISTANCE_METRIC = "cosine"
 
 
@@ -105,6 +130,9 @@ async def enroll(
         except HTTPException:
             pass  # Skip images where no face detected
 
+    # Clean up memory immediately after processing
+    gc.collect()
+
     if not embeddings:
         raise HTTPException(
             status_code=400,
@@ -143,7 +171,11 @@ async def extract(request: Request, image: UploadFile = File(...)):
             align=True,
         )
     except Exception as e:
+        gc.collect()
         return {"faces": [], "count": 0, "error": str(e)}
+
+    # Clean up memory immediately after processing
+    gc.collect()
 
     if not results:
         return {"faces": [], "count": 0}
