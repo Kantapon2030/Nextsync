@@ -193,6 +193,29 @@ def run_pipeline(service_account_path, folder_id=None, workers=4, log_callback=N
         conn.close()
         return {"processed": 0, "errors": 0}
 
+    # Extract folder ID if a full URL is provided
+    folder_id = folder_id.strip()
+    if "drive.google.com" in folder_id or "/" in folder_id:
+        import re
+        m = re.search(r"/folders/([a-zA-Z0-9-_]+)", folder_id)
+        if m:
+            extracted_id = m.group(1)
+            log(f"ℹ️ Extracted folder ID from URL: {extracted_id}")
+            folder_id = extracted_id
+        else:
+            m2 = re.search(r"[?&]id=([a-zA-Z0-9-_]+)", folder_id)
+            if m2:
+                extracted_id = m2.group(1)
+                log(f"ℹ️ Extracted folder ID from URL parameter: {extracted_id}")
+                folder_id = extracted_id
+            else:
+                parts = [p.strip() for p in folder_id.split("/") if p.strip()]
+                for part in reversed(parts):
+                    if len(part) >= 15 and re.match(r"^[a-zA-Z0-9-_]+$", part):
+                        log(f"ℹ️ Extracted folder ID from URL segment: {part}")
+                        folder_id = part
+                        break
+
     log(f"📁 Scanning Drive folder {folder_id}...")
     try:
         results = gdrive_service.files().list(

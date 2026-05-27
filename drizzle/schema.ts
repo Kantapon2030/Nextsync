@@ -14,7 +14,7 @@ import {
 import { sql, relations } from "drizzle-orm";
 
 // Custom vector type for pgvector
-// ArcFace generates 512-dimensional embeddings (upgraded from 128-dim face-api.js).
+// We use vector(512) because ArcFace generates 512-dimensional embeddings.
 export const vector = customType<{ data: number[] }>({
   dataType() {
     return "vector(512)";
