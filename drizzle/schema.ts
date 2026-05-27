@@ -14,10 +14,10 @@ import {
 import { sql, relations } from "drizzle-orm";
 
 // Custom vector type for pgvector
-// We use vector(128) because face-api.js generates 128-dimensional embeddings.
+// ArcFace generates 512-dimensional embeddings (upgraded from 128-dim face-api.js).
 export const vector = customType<{ data: number[] }>({
   dataType() {
-    return "vector(128)";
+    return "vector(512)";
   },
   toDriver(value: number[]): string {
     if (!Array.isArray(value)) return "[]";
@@ -53,12 +53,15 @@ export const users = pgTable("users", {
 
 // ─────────────────────────────────────────
 // USER FACE EMBEDDINGS (enrolled at registration)
+// ArcFace 512-dim — upgraded from 128-dim face-api.js
 // ─────────────────────────────────────────
 export const userFaceEmbeddings = pgTable("user_face_embeddings", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  embedding: vector("embedding").notNull(),
+  embedding: vector("embedding").notNull(),   // 512-dim ArcFace
   enrolledAt: timestamp("enrolled_at", { withTimezone: true }).defaultNow(),
+  facesUsed: integer("faces_used").default(1),  // Number of angles captured (1-3)
+  model: text("model").default("ArcFace"),       // Model version tracking
 });
 
 // ─────────────────────────────────────────
@@ -142,17 +145,19 @@ export const photos = pgTable("photos", {
 
 // ─────────────────────────────────────────
 // PHOTO FACE EMBEDDINGS (faces found in photos)
+// ArcFace 512-dim — upgraded from 128-dim face-api.js
 // ─────────────────────────────────────────
 export const photoFaceEmbeddings = pgTable("photo_face_embeddings", {
   id: uuid("id").primaryKey().defaultRandom(),
   photoId: uuid("photo_id").notNull().references(() => photos.id, { onDelete: "cascade" }),
-  embedding: vector("embedding").notNull(),
+  embedding: vector("embedding").notNull(),   // 512-dim ArcFace
   faceIndex: integer("face_index").default(0),
   bboxX: doublePrecision("bbox_x"),
   bboxY: doublePrecision("bbox_y"),
   bboxW: doublePrecision("bbox_w"),
   bboxH: doublePrecision("bbox_h"),
   confidence: doublePrecision("confidence"),
+  model: text("model").default("ArcFace"),     // Model version tracking
 });
 
 // ─────────────────────────────────────────

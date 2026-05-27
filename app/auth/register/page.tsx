@@ -27,10 +27,6 @@ export default function RegisterPage() {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Step 2 Face Enroll states
-  const [enrollError, setEnrollError] = useState<string | null>(null);
-  const [enrolling, setEnrolling] = useState(false);
-
   // Handle Step 1: Info -> Register + Sign In in background -> Go to Step 2
   const handleStep1Submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,41 +86,19 @@ export default function RegisterPage() {
     }
   };
 
-  // Handle Step 2: Face Enrollment
-  const handleFaceEnroll = async (embedding: number[]) => {
-    setEnrollError(null);
-    setEnrolling(true);
+  // Handle Step 2: Face Enrollment — now handled inside FaceEnrollment component
+  const handleFaceEnrollComplete = async () => {
+    // Sync Next-Auth session properties
+    await update({ faceEnrolled: true });
 
-    try {
-      const res = await fetch("/api/face/enroll", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ embedding }),
-      });
+    // Go to Step 3
+    setStep(3);
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "เกิดข้อผิดพลาดในการบันทึกใบหน้า");
-      }
-
-      // Sync Next-Auth session properties
-      await update({ faceEnrolled: true });
-
-      // Go to Step 3
-      setStep(3);
-
-      // Auto redirect to gallery after 3 seconds
-      setTimeout(() => {
-        router.push("/gallery");
-        router.refresh();
-      }, 3000);
-
-    } catch (err: any) {
-      console.error(err);
-      setEnrollError(err.message || "ไม่สามารถส่งข้อมูลสแกนใบหน้าได้");
-    } finally {
-      setEnrolling(false);
-    }
+    // Auto redirect to gallery after 3 seconds
+    setTimeout(() => {
+      router.push("/gallery");
+      router.refresh();
+    }, 3000);
   };
 
   const handleSkipEnroll = () => {
@@ -290,16 +264,14 @@ export default function RegisterPage() {
         {step === 2 && (
           <div className="space-y-4">
             <div className="text-center space-y-1">
-              <h3 className="text-lg font-bold text-[var(--text)]">สแกนใบหน้าบันทึกระบบ</h3>
+              <h3 className="text-lg font-bold text-[var(--text)]">สแกนใบหน้า 3 มุม</h3>
               <p className="text-xs text-[var(--text2)]">
-                มองตรงมายังกล้องและรักษาระยะห่างเพื่อให้ AI สร้างแผนผังใบหน้าสำหรับการค้นหารูป
+                ถ่ายใบหน้า 3 มุม (ตรง / ซ้าย / ขวา) เพื่อให้ AI สร้างแผนผังใบหน้าที่แม่นยำ
               </p>
             </div>
 
             <FaceEnrollment
-              onEnroll={handleFaceEnroll}
-              isLoading={enrolling}
-              errorMsg={enrollError}
+              onComplete={handleFaceEnrollComplete}
             />
 
             <div className="text-center pt-2">

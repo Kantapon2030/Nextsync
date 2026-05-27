@@ -1,85 +1,11 @@
-// Redirect @tensorflow/tfjs-node to @tensorflow/tfjs to bypass native build issues on Windows/Node 24
-if (typeof require !== "undefined") {
-  const Module = require("module");
-  const originalRequire = Module.prototype.require;
-  Module.prototype.require = function (id: string) {
-    if (id === "@tensorflow/tfjs-node") {
-      return originalRequire.call(this, "@tensorflow/tfjs");
-    }
-    return originalRequire.apply(this, arguments);
-  };
-}
-
+// lib/pipeline.ts
+// Photo processing pipeline: download from Drive, generate thumbnails, approve,
+// and index faces via the ArcFace Python microservice.
 import { db, photos, photoFaceEmbeddings, processingJobs } from "@/lib/db";
 import { and, eq, isNull, sql, count } from "drizzle-orm";
 import { downloadFileBuffer } from "./drive";
 import { uploadToR2 } from "./r2";
-import path from "path";
-
-let faceapi: any = null;
-let serverModelsLoaded = false;
-let serverModelsLoadingPromise: Promise<void> | null = null;
-
-async function loadModelsServer() {
-  if (!faceapi) {
-    faceapi = await import("@vladmandic/face-api/dist/face-api.node.js");
-  }
-  if (serverModelsLoaded) return;
-
-  if (!serverModelsLoadingPromise) {
-    serverModelsLoadingPromise = (async () => {
-      const modelsPath = path.join(process.cwd(), "public/models");
-      await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelsPath);
-      await faceapi.nets.faceLandmark68Net.loadFromDisk(modelsPath);
-      await faceapi.nets.faceRecognitionNet.loadFromDisk(modelsPath);
-      serverModelsLoaded = true;
-      console.log("[PIPELINE] Face models loaded from disk.");
-    })();
-  }
-
-  await serverModelsLoadingPromise;
-}
-
-/**
- * Detects faces and extracts embeddings from image buffer for Face Search indexing.
- * Does NOT reject photos — only used to build the face index.
- */
-async function detectAndIndexFaces(buffer: Buffer, minConfidence = 0.5) {
-  if (!faceapi) {
-    faceapi = await import("@vladmandic/face-api/dist/face-api.node.js");
-  }
-  const sharp = (await import("sharp")).default;
-
-  let imgObj = sharp(buffer).removeAlpha();
-  const metadata = await imgObj.metadata();
-  const maxDim = 800;
-  let targetWidth = metadata.width || 0;
-  let targetHeight = metadata.height || 0;
-
-  if (targetWidth > maxDim || targetHeight > maxDim) {
-    if (targetWidth > targetHeight) {
-      targetHeight = Math.round((targetHeight * maxDim) / targetWidth);
-      targetWidth = maxDim;
-    } else {
-      targetWidth = Math.round((targetWidth * maxDim) / targetHeight);
-      targetHeight = maxDim;
-    }
-    imgObj = imgObj.resize(targetWidth, targetHeight);
-  }
-
-  const { data: raw, info: resizedInfo } = await imgObj.toFormat("raw").toBuffer({ resolveWithObject: true });
-  const tensor = faceapi.tf.tensor3d(new Uint8Array(raw), [resizedInfo.height, resizedInfo.width, 3]);
-
-  await loadModelsServer();
-
-  const detections = await faceapi
-    .detectAllFaces(tensor, new faceapi.SsdMobilenetv1Options({ minConfidence }))
-    .withFaceLandmarks()
-    .withFaceDescriptors();
-
-  tensor.dispose();
-  return detections;
-}
+import { extractFaces } from "./faceApi";
 
 /**
  * Trigger processing job for an event (queues it if not already running).
@@ -247,12 +173,13 @@ export async function processPhotoBatch(
           const thumbnailUrl = await uploadToR2(key800, thumb800, "image/jpeg");
           const thumbnailSm = await uploadToR2(key400, thumb400, "image/jpeg");
 
-          // 3. Detect faces for embedding index (does NOT affect approval)
-          let faces: any[] = [];
+          // 3. Extract faces via ArcFace Python microservice (512-dim)
+          let faces: Array<{ embedding: number[]; bbox: { x: number; y: number; w: number; h: number }; confidence: number }> = [];
           try {
-            faces = await detectAndIndexFaces(buffer, 0.5);
+            const result = await extractFaces(buffer, photo.filename);
+            faces = result.faces;
           } catch (faceErr) {
-            console.warn(`[PIPELINE] Face detection failed for ${photo.id}, continuing without embeddings:`, faceErr);
+            console.warn(`[PIPELINE] ArcFace extraction failed for ${photo.id}, continuing without embeddings:`, faceErr);
           }
 
           // 4. Mark as APPROVED (no quality rejection)
@@ -270,24 +197,21 @@ export async function processPhotoBatch(
             })
             .where(eq(photos.id, photo.id));
 
-          // 5. Insert face embeddings if detected
+          // 5. Insert ArcFace 512-dim embeddings for Face Search
           if (faces.length > 0) {
             await db.insert(photoFaceEmbeddings).values(
-              faces.map((face: any, index: number) => {
-                const bbox = face.detection.box;
-                const descriptor = Array.from(face.descriptor) as number[];
-                return {
-                  id: crypto.randomUUID(),
-                  photoId: photo.id,
-                  embedding: descriptor,
-                  faceIndex: index,
-                  bboxX: bbox.x,
-                  bboxY: bbox.y,
-                  bboxW: bbox.width,
-                  bboxH: bbox.height,
-                  confidence: face.detection.score,
-                };
-              })
+              faces.map((face, index: number) => ({
+                id: crypto.randomUUID(),
+                photoId: photo.id,
+                embedding: face.embedding,     // number[512]
+                faceIndex: index,
+                bboxX: face.bbox?.x ?? null,
+                bboxY: face.bbox?.y ?? null,
+                bboxW: face.bbox?.w ?? null,
+                bboxH: face.bbox?.h ?? null,
+                confidence: face.confidence ?? null,
+                model: "ArcFace",
+              }))
             );
           }
 
