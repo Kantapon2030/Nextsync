@@ -2,6 +2,7 @@ import sys
 import io
 import os
 import gc
+import traceback
 
 # ─── TensorFlow CPU Memory/Threading Optimization ───────────────────────────
 # Set environment variables BEFORE importing deepface / tensorflow
@@ -10,6 +11,7 @@ os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
 os.environ["TF_NUM_INTEROP_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
 
 # Force stdout and stderr to use UTF-8 encoding on Windows to prevent UnicodeEncodeErrors with emojis
 if sys.platform.startswith('win'):
@@ -171,6 +173,7 @@ async def extract(request: Request, image: UploadFile = File(...)):
             align=True,
         )
     except Exception as e:
+        traceback.print_exc()
         gc.collect()
         return {"faces": [], "count": 0, "error": str(e)}
 

@@ -87,6 +87,9 @@ export async function extractFaces(
     }
 
     const data = await res.json();
+    if (data.error) {
+      console.error(`[faceApi] /extract returned error for ${filename}:`, data.error);
+    }
     return { faces: data.faces ?? [] };
   } catch (e: any) {
     console.warn(`[faceApi] /extract request failed for ${filename}: ${e.message}`);
