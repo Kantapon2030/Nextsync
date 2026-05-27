@@ -1,24 +1,30 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from deepface import DeepFace
 import numpy as np
 import cv2
 import os
 
-app = FastAPI(title="Nextsync Face API", version="2.0.0")
+FACE_API_SECRET = os.getenv("FACE_API_SECRET", "")
 
-ALLOWED_ORIGINS = [
-    os.getenv("NEXTJS_URL", "http://localhost:3000"),
-    "http://localhost:3000",
-    "http://localhost:3001",
-]
+app = FastAPI(title="Nextsync Face API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
+
+
+def verify_secret(request: Request):
+    """Validate FACE_API_SECRET from Authorization header."""
+    if not FACE_API_SECRET:
+        return  # No secret configured, skip check (dev mode)
+    auth = request.headers.get("Authorization", "")
+    token = auth.replace("Bearer ", "").strip()
+    if token != FACE_API_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 MODEL_NAME = "ArcFace"        # 512-dim, best accuracy
 DETECTOR = "retinaface"       # Best for angled/makeup faces
@@ -66,10 +72,12 @@ async def health():
 # ─── Endpoint 1: Enroll ──────────────────────────────────────
 @app.post("/enroll")
 async def enroll(
+    request: Request,
     image1: UploadFile = File(...),
     image2: UploadFile = File(None),
     image3: UploadFile = File(None),
 ):
+    verify_secret(request)
     """
     Receive 1–3 face images, return mean ArcFace 512-dim embedding.
     Used for user registration/re-enrollment.
@@ -106,7 +114,8 @@ async def enroll(
 
 # ─── Endpoint 2: Extract ─────────────────────────────────────
 @app.post("/extract")
-async def extract(image: UploadFile = File(...)):
+async def extract(request: Request, image: UploadFile = File(...)):
+    verify_secret(request)
     """
     Extract embeddings for ALL faces in one photo.
     Used by the pipeline to index event photos.
@@ -147,10 +156,12 @@ async def extract(image: UploadFile = File(...)):
 # ─── Endpoint 3: Compare (debug/test) ────────────────────────
 @app.post("/compare")
 async def compare(
+    request: Request,
     image1: UploadFile = File(...),
     image2: UploadFile = File(...),
 ):
     """Compare two face images. For debugging and threshold tuning."""
+    verify_secret(request)
     raw1 = await image1.read()
     raw2 = await image2.read()
     img1 = image_from_bytes(raw1)
