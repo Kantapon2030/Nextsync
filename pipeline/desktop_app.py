@@ -412,6 +412,27 @@ class NextSyncApp(tk.Tk):
         sa_path = cfg.get("service_account_path", "").strip()
         folder_id = cfg.get("folder_id", "").strip()
 
+        # Extract folder ID if a full URL is provided
+        if "drive.google.com" in folder_id or "/" in folder_id:
+            import re
+            m = re.search(r"/folders/([a-zA-Z0-9-_]+)", folder_id)
+            if m:
+                folder_id = m.group(1)
+            else:
+                m2 = re.search(r"[?&]id=([a-zA-Z0-9-_]+)", folder_id)
+                if m2:
+                    folder_id = m2.group(1)
+                else:
+                    parts = [p.strip() for p in folder_id.split("/") if p.strip()]
+                    for part in reversed(parts):
+                        if len(part) >= 15 and re.match(r"^[a-zA-Z0-9-_]+$", part):
+                            folder_id = part
+                            break
+            # Update entry in UI and config
+            self.var_folder_id.set(folder_id)
+            cfg["folder_id"] = folder_id
+            save_config(cfg)
+
         if not sa_path or not os.path.exists(sa_path):
             messagebox.showerror("Error", "กรุณาเลือกไฟล์ Service Account JSON ที่ถูกต้อง")
             return
