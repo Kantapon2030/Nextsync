@@ -1,13 +1,10 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# Install system deps for OpenCV with retry logic in case of network issues
-RUN (apt-get update -y || (sleep 5 && apt-get update -y)) && apt-get install -y --fix-missing \
-    libgl1-mesa-glx \
+# Install system deps for headless OpenCV and TensorFlow/models
+RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
