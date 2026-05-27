@@ -5,14 +5,19 @@ import gc
 import traceback
 import asyncio
 
+is_render = os.getenv("RENDER", "false").lower() == "true"
+
 # ─── TensorFlow CPU Memory/Threading Optimization ───────────────────────────
 # Set environment variables BEFORE importing deepface / tensorflow
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
-os.environ["TF_NUM_INTEROP_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
+
+if is_render:
+    # Restrict to 1 core only on Render to prevent OOM
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+    os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
 
 # Force stdout and stderr to use UTF-8 encoding on Windows to prevent UnicodeEncodeErrors with emojis
 if sys.platform.startswith('win'):
@@ -21,9 +26,10 @@ if sys.platform.startswith('win'):
 
 try:
     import tensorflow as tf
-    # Limit runtime threading for low-RAM containers
-    tf.config.threading.set_inter_op_parallelism_threads(1)
-    tf.config.threading.set_intra_op_parallelism_threads(1)
+    if is_render:
+        # Limit runtime threading for low-RAM containers
+        tf.config.threading.set_inter_op_parallelism_threads(1)
+        tf.config.threading.set_intra_op_parallelism_threads(1)
     # Disable GPU memory pre-allocation (prevent GPU growth leaks if running on system with GPU)
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
@@ -126,15 +132,16 @@ async def enroll(
         gc.collect()
         embeddings = []
 
-        # Use a lighter detector ('opencv') for enrollment to fit within Render Free tier (512MB RAM).
-        # Enrollment is always close-up frontal face, so opencv is extremely fast and sufficient.
+        # Use a lighter detector ('ssd') on Render to stay within 512MB RAM,
+        # but use 'retinaface' (which is the default DETECTOR locally) for high-accuracy local enrollment.
+        detector_backend = "ssd" if is_render else DETECTOR
         for upload in [image1, image2, image3]:
             if upload is None:
                 continue
             raw = await upload.read()
             img = image_from_bytes(raw)
             try:
-                emb = get_embedding(img, detector="opencv")
+                emb = get_embedding(img, detector=detector_backend)
                 embeddings.append(emb)
             except HTTPException:
                 pass  # Skip images where no face detected

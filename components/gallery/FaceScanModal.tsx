@@ -17,6 +17,7 @@ const ANGLE_HINT: Record<Angle, string> = {
   ซ้าย: "หันหน้าเล็กน้อยไปทางซ้าย 👈",
   ขวา: "หันหน้าเล็กน้อยไปทางขวา 👉",
 };
+const REQUIRED_STABLE_FRAMES = 8;
 
 interface FaceScanModalProps {
   isOpen: boolean;
@@ -59,6 +60,7 @@ export function FaceScanModal({
   const [step, setStep] = useState(0);
   const [captures, setCaptures] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
+  const [stableCount, setStableCount] = useState(0);
 
   // For search mode: single capture
   const [captureFile, setCaptureFile] = useState<File | null>(null);
@@ -101,6 +103,7 @@ export function FaceScanModal({
     setFaceCentered(false);
     setFaceAngle("unknown");
     setFlashActive(false);
+    setStableCount(0);
 
     navigator.mediaDevices
       .getUserMedia({ video: { facingMode: "user", width: { ideal: 640 } }, audio: false })
@@ -212,20 +215,23 @@ export function FaceScanModal({
       });
       setPreviews((prev) => [...prev, previewUrl]);
       setStep((s) => s + 1);
+      setStableCount(0);
     } else {
       // Search mode: auto capture first centered face and trigger search
       setCaptureFile(file);
       setCapturePreview(previewUrl);
+      setStableCount(0);
     }
   }, [captureFrame, mode]);
 
-  // Real-time Face Tracking Loop using client-side face-api.js
+  // Real-time Face Tracking Loop using client-side face-api.js (throttled to 150ms to prevent lag)
   useEffect(() => {
     if (!isOpen || !camReady || !modelsLoaded || !videoRef.current) return;
 
     let active = true;
     let stableFrames = 0;
-    const REQUIRED_STABLE_FRAMES = 8; // Face must be stable for 8 frames
+    let lastDetectionTime = 0;
+    const DETECTION_INTERVAL = 150; // run detection every 150ms
 
     const runLoop = async () => {
       if (!active || !videoRef.current) return;
@@ -237,78 +243,90 @@ export function FaceScanModal({
           return;
         }
 
-        const detection = await faceapi
-          .detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
-          .withFaceLandmarks();
+        const now = Date.now();
+        if (now - lastDetectionTime >= DETECTION_INTERVAL) {
+          lastDetectionTime = now;
 
-        if (detection) {
-          setFaceDetected(true);
-          const box = detection.detection.box;
-          const videoWidth = video.videoWidth || 640;
-          const videoHeight = video.videoHeight || 480;
+          const detection = await faceapi
+            .detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+            .withFaceLandmarks();
 
-          // Check if face is centered in the oval guide
-          const faceCenterX = box.x + box.width / 2;
-          const faceCenterY = box.y + box.height / 2;
+          if (detection) {
+            setFaceDetected(true);
+            const box = detection.detection.box;
+            const videoWidth = video.videoWidth || 640;
+            const videoHeight = video.videoHeight || 480;
 
-          const errorX = Math.abs(faceCenterX - videoWidth / 2) / videoWidth;
-          const errorY = Math.abs(faceCenterY - videoHeight / 2) / videoHeight;
+            // Check if face is centered in the oval guide
+            const faceCenterX = box.x + box.width / 2;
+            const faceCenterY = box.y + box.height / 2;
 
-          // Centered parameters: face width must occupy 25%-50% of the screen
-          const isCentered = errorX < 0.16 && errorY < 0.18 && (box.width / videoWidth) > 0.25 && (box.width / videoWidth) < 0.50;
-          setFaceCentered(isCentered);
+            const errorX = Math.abs(faceCenterX - videoWidth / 2) / videoWidth;
+            const errorY = Math.abs(faceCenterY - videoHeight / 2) / videoHeight;
 
-          // Head yaw calculation
-          const landmarks = detection.landmarks;
-          const nose = landmarks.getNose()[3]; // nose tip
-          const leftJaw = landmarks.getJawOutline()[0];
-          const rightJaw = landmarks.getJawOutline()[16];
+            // Centered parameters: face width must occupy 25%-50% of the screen
+            const isCentered = errorX < 0.16 && errorY < 0.18 && (box.width / videoWidth) > 0.25 && (box.width / videoWidth) < 0.50;
+            setFaceCentered(isCentered);
 
-          const distLeft = nose.x - leftJaw.x;
-          const distRight = rightJaw.x - nose.x;
-          const ratio = distLeft / distRight;
+            // Head yaw calculation
+            const landmarks = detection.landmarks;
+            const nose = landmarks.getNose()[3]; // nose tip
+            const leftJaw = landmarks.getJawOutline()[0];
+            const rightJaw = landmarks.getJawOutline()[16];
 
-          let angle: "ตรง" | "ซ้าย" | "ขวา" | "unknown" = "unknown";
-          if (ratio >= 0.76 && ratio <= 1.30) {
-            angle = "ตรง";
-          } else if (ratio < 0.65) {
-            angle = "ซ้าย"; // head turned left
-          } else if (ratio > 1.55) {
-            angle = "ขวา"; // head turned right
-          }
-          setFaceAngle(angle);
+            const distLeft = nose.x - leftJaw.x;
+            const distRight = rightJaw.x - nose.x;
+            const ratio = distLeft / distRight;
 
-          // Auto-trigger logic
-          if (isCentered) {
-            if (mode === "enroll") {
-              const currentStep = currentStepRef.current;
-              const targetAngle = ANGLES[currentStep];
-              if (angle === targetAngle) {
-                stableFrames++;
-                if (stableFrames >= REQUIRED_STABLE_FRAMES) {
+            let angle: "ตรง" | "ซ้าย" | "ขวา" | "unknown" = "unknown";
+            if (ratio >= 0.76 && ratio <= 1.30) {
+              angle = "ตรง";
+            } else if (ratio < 0.65) {
+              angle = "ซ้าย"; // head turned left
+            } else if (ratio > 1.55) {
+              angle = "ขวา"; // head turned right
+            }
+            setFaceAngle(angle);
+
+            // Auto-trigger logic
+            if (isCentered) {
+              if (mode === "enroll") {
+                const currentStep = currentStepRef.current;
+                const targetAngle = ANGLES[currentStep];
+                if (angle === targetAngle) {
+                  stableFrames++;
+                  setStableCount(stableFrames);
+                  if (stableFrames >= REQUIRED_STABLE_FRAMES) {
+                    stableFrames = 0;
+                    setStableCount(0);
+                    triggerAutoCapture();
+                  }
+                } else {
                   stableFrames = 0;
-                  triggerAutoCapture();
+                  setStableCount(0);
                 }
               } else {
-                stableFrames = 0;
+                // Search mode: auto capture once centered
+                stableFrames++;
+                setStableCount(stableFrames);
+                if (stableFrames >= REQUIRED_STABLE_FRAMES && !currentStepRef.current) {
+                  stableFrames = 0;
+                  setStableCount(0);
+                  triggerAutoCapture();
+                }
               }
             } else {
-              // Search mode: auto capture once centered
-              stableFrames++;
-              if (stableFrames >= REQUIRED_STABLE_FRAMES && !currentStepRef.current) {
-                stableFrames = 0;
-                triggerAutoCapture();
-              }
+              stableFrames = 0;
+              setStableCount(0);
             }
-          } else {
-            stableFrames = 0;
-          }
 
-        } else {
-          setFaceDetected(false);
-          setFaceCentered(false);
-          setFaceAngle("unknown");
-          stableFrames = 0;
+          } else {
+            setFaceDetected(false);
+            setFaceCentered(false);
+            setFaceAngle("unknown");
+            stableFrames = 0;
+            setStableCount(0);
+          }
         }
 
       } catch (err) {
@@ -374,26 +392,78 @@ export function FaceScanModal({
   const currentAngle = ANGLES[Math.min(step, ANGLES.length - 1)];
   const enrollDone = step >= ANGLES.length;
 
-  const getStatusHint = () => {
-    if (!modelsLoaded) return "กำลังดาวน์โหลดโมเดลวิเคราะห์ใบหน้า... ⚙️";
-    if (!camReady) return "กำลังเปิดกล้อง... 🎥";
-    if (!faceDetected) return "กรุณาจัดวางใบหน้าให้อยู่ในหน้าจอ 😐";
-    if (!faceCentered) return "กรุณาขยับใบหน้าเข้ามาให้อยู่ในกรอบประชิด 📐";
+  const getBottomGuideState = () => {
+    if (!modelsLoaded) {
+      return {
+        emoji: "⚙️",
+        animateClass: "animate-spin",
+        label: "กำลังโหลดโมเดล",
+        text: "กำลังโหลดไฟล์วิเคราะห์ใบหน้า...",
+        color: "#06b6d4"
+      };
+    }
+    if (!camReady) {
+      return {
+        emoji: "🎥",
+        animateClass: "animate-pulse",
+        label: "กำลังเปิดกล้อง",
+        text: "กำลังเรียกใช้งานกล้อง...",
+        color: "#06b6d4"
+      };
+    }
+    if (!faceDetected) {
+      return {
+        emoji: "😐",
+        animateClass: "animate-pulse",
+        label: "ไม่พบใบหน้า",
+        text: "กรุณาจัดวางใบหน้าให้อยู่ในหน้าจอ 😐",
+        color: "#f59e0b"
+      };
+    }
+    if (!faceCentered) {
+      return {
+        emoji: "📐",
+        animateClass: "animate-bounce",
+        label: "ตำแหน่งไม่ตรงกรอบ",
+        text: "ขยับใบหน้าเข้ามาประชิดกรอบสีเขียวด้านใน 📐",
+        color: "#f59e0b"
+      };
+    }
 
     if (mode === "enroll") {
       if (faceAngle !== currentAngle) {
-        return `กรุณา${ANGLE_HINT[currentAngle]}`;
+        const handEmoji = currentAngle === "ตรง" ? "😐" : currentAngle === "ซ้าย" ? "👈" : "👉";
+        const anim = currentAngle === "ตรง" ? "animate-heartbeat" : currentAngle === "ซ้าย" ? "animate-slide-left" : "animate-slide-right";
+        return {
+          emoji: handEmoji,
+          animateClass: anim,
+          label: "องศาไม่ถูกต้อง",
+          text: ANGLE_HINT[currentAngle],
+          color: "#06b6d4"
+        };
       }
-      return "ตำแหน่งและองศาถูกต้อง ค้างไว้สักครู่... 📸";
+      return {
+        emoji: currentAngle === "ตรง" ? "😐" : currentAngle === "ซ้าย" ? "👈" : "👉",
+        animateClass: currentAngle === "ตรง" ? "animate-heartbeat" : currentAngle === "ซ้าย" ? "animate-slide-left" : "animate-slide-right",
+        label: "ตำแหน่งถูกต้อง",
+        text: "เยี่ยม! ตรึงใบหน้านิ่งไว้สักครู่... 📸",
+        color: "#22c55e"
+      };
     } else {
-      return "จัดวางตำแหน่งใบหน้าถูกต้อง... 📸";
+      return {
+        emoji: "😐",
+        animateClass: "animate-heartbeat",
+        label: "ตำแหน่งถูกต้อง",
+        text: "ตำแหน่งถูกต้อง! ค้างไว้เพื่อสแกน... 📸",
+        color: "#22c55e"
+      };
     }
   };
 
   return (
     <div className="fixed inset-0 bg-[#060813]/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       
-      {/* Rainbow Glow & Shutter Flash styles */}
+      {/* Premium Sci-Fi Visual Effects & Animations */}
       <style jsx global>{`
         @keyframes rainbow-glow {
           0% { box-shadow: 0 0 15px #ec4899, inset 0 0 10px #ec4899; border-color: #ec4899; }
@@ -406,6 +476,65 @@ export function FaceScanModal({
         .rainbow-border {
           animation: rainbow-glow 3s linear infinite;
           border-width: 3px !important;
+        }
+        @keyframes heartbeat-pulse {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.15); }
+        }
+        @keyframes slide-hand-left {
+          0%, 100% { transform: translateX(0); }
+          50% { transform: translateX(-8px); }
+        }
+        @keyframes slide-hand-right {
+          0%, 100% { transform: translateX(0); }
+          50% { transform: translateX(8px); }
+        }
+        @keyframes scan-move {
+          0% { top: 0%; opacity: 0.1; }
+          50% { top: 100%; opacity: 0.9; }
+          100% { top: 0%; opacity: 0.1; }
+        }
+        .animate-heartbeat {
+          animation: heartbeat-pulse 1.2s ease-in-out infinite;
+        }
+        .animate-slide-left {
+          animation: slide-hand-left 1.2s ease-in-out infinite;
+        }
+        .animate-slide-right {
+          animation: slide-hand-right 1.2s ease-in-out infinite;
+        }
+        .scan-line {
+          position: absolute;
+          left: 0;
+          width: 100%;
+          height: 3px;
+          background: linear-gradient(90deg, transparent, #06b6d4, transparent);
+          box-shadow: 0 0 10px #06b6d4, 0 0 20px #06b6d4;
+          animation: scan-move 3s ease-in-out infinite;
+          z-index: 15;
+          pointer-events: none;
+        }
+        .corner-bracket {
+          position: absolute;
+          width: 24px;
+          height: 24px;
+          border-color: rgba(255, 255, 255, 0.45);
+          border-style: solid;
+          pointer-events: none;
+          z-index: 15;
+          transition: all 0.3s ease;
+        }
+        .corner-top-left { top: 16px; left: 16px; border-width: 3px 0 0 3px; border-top-left-radius: 8px; }
+        .corner-top-right { top: 16px; right: 16px; border-width: 3px 3px 0 0; border-top-right-radius: 8px; }
+        .corner-bottom-left { bottom: 16px; left: 16px; border-width: 0 0 3px 3px; border-bottom-left-radius: 8px; }
+        .corner-bottom-right { bottom: 16px; right: 16px; border-width: 0 3px 3px 0; border-bottom-right-radius: 8px; }
+        
+        .rainbow-border .corner-bracket {
+          border-color: #06b6d4;
+        }
+        .aligned-state .corner-bracket {
+          border-color: #22c55e !important;
+          box-shadow: 0 0 8px #22c55e;
         }
       `}</style>
 
@@ -460,12 +589,22 @@ export function FaceScanModal({
           {/* Camera Frame */}
           <div className={`relative aspect-[4/3] w-full rounded-2xl overflow-hidden bg-black/60 shadow-inner flex items-center justify-center transition-all duration-300 ${
             mode === "enroll" && faceCentered && faceAngle === currentAngle
-              ? "ring-4 ring-green-500 shadow-[0_0_25px_rgba(34,197,94,0.6)] border-transparent"
+              ? "ring-4 ring-green-500 shadow-[0_0_25px_rgba(34,197,94,0.6)] border-transparent aligned-state"
               : faceDetected && !capturePreview
               ? "rainbow-border border-transparent"
               : "border border-[var(--border)]"
           }`}>
             
+            {/* Corner Brackets */}
+            {camReady && !capturePreview && (
+              <>
+                <div className="corner-bracket corner-top-left" />
+                <div className="corner-bracket corner-top-right" />
+                <div className="corner-bracket corner-bottom-left" />
+                <div className="corner-bracket corner-bottom-right" />
+              </>
+            )}
+
             {/* Camera screen flash overlay */}
             {flashActive && (
               <div className="absolute inset-0 bg-white z-50 pointer-events-none transition-opacity duration-75 opacity-100" />
@@ -499,6 +638,11 @@ export function FaceScanModal({
               style={{ transform: "scaleX(-1)", display: camReady ? "block" : "none" }}
             />
 
+            {/* Laser Scan Line */}
+            {camReady && !capturePreview && (
+              <div className="scan-line" />
+            )}
+
             {/* Search: captured preview */}
             {mode === "search" && capturePreview && (
               <img src={capturePreview} alt="Captured" className="absolute inset-0 w-full h-full object-cover z-20" />
@@ -517,18 +661,54 @@ export function FaceScanModal({
               </div>
             )}
 
-            {/* Centered Guide Indicator Banner */}
-            {camReady && !capturePreview && (
-              <div className={`absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-bold flex items-center gap-2 select-none whitespace-nowrap z-20 transition-all duration-300 shadow-md ${
-                faceCentered && (mode === "search" || faceAngle === currentAngle)
-                  ? "bg-green-500/90 text-white animate-bounce"
-                  : faceDetected
-                  ? "bg-yellow-500/90 text-slate-950"
-                  : "bg-black/70 text-slate-300"
-              }`}>
-                {getStatusHint()}
-              </div>
-            )}
+            {/* Interactive Emoji Guidance Card */}
+            {camReady && !capturePreview && (() => {
+              const guide = getBottomGuideState();
+              return (
+                <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-2 z-20 pointer-events-none px-4">
+                  <div className="bg-[#0b0c16]/95 border border-white/10 backdrop-blur-md rounded-2xl px-5 py-3 flex items-center gap-4 shadow-[0_12px_36px_rgba(0,0,0,0.6)] transition-all duration-300">
+                    <div className="relative flex items-center justify-center w-14 h-14 bg-white/5 rounded-full overflow-hidden border border-white/10 shrink-0">
+                      
+                      {/* Animated Emoji */}
+                      <span className={`text-3xl ${guide.animateClass}`}>{guide.emoji}</span>
+
+                      {/* Progress Circle SVG */}
+                      <svg className="absolute inset-0 w-full h-full -rotate-90">
+                        <circle
+                          cx="28"
+                          cy="28"
+                          r="25"
+                          fill="none"
+                          stroke="rgba(255, 255, 255, 0.08)"
+                          strokeWidth="3"
+                        />
+                        <circle
+                          cx="28"
+                          cy="28"
+                          r="25"
+                          fill="none"
+                          stroke={guide.color}
+                          strokeWidth="3"
+                          strokeDasharray={2 * Math.PI * 25}
+                          strokeDashoffset={2 * Math.PI * 25 * (1 - stableCount / REQUIRED_STABLE_FRAMES)}
+                          className="transition-all duration-150"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    </div>
+
+                    <div className="flex flex-col text-left">
+                      <span className="text-slate-400 text-[10px] uppercase tracking-wider font-semibold">
+                        {guide.label}
+                      </span>
+                      <span className="text-white text-xs font-bold font-sans mt-0.5 leading-snug">
+                        {guide.text}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Processing Overlay */}
             {processing && (
