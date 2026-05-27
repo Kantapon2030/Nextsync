@@ -236,6 +236,16 @@ class NextSyncApp(tk.Tk):
         )
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 8))
 
+        self.process_pending_btn = tk.Button(
+            ctrl_frame, text="⚙️  ประมวลผลรูปค้าง",
+            bg="#0284c7", fg="white",
+            activebackground="#0369a1", activeforeground="white",
+            font=("Segoe UI", 11, "bold"), relief=tk.FLAT,
+            padx=20, pady=8, cursor="hand2",
+            command=self._start_processing_pending
+        )
+        self.process_pending_btn.pack(side=tk.LEFT, padx=(0, 8))
+
         self.save_btn = tk.Button(
             ctrl_frame, text="💾  บันทึกการตั้งค่า",
             bg="#1e293b", fg="#94a3b8",
@@ -448,6 +458,7 @@ class NextSyncApp(tk.Tk):
         self.stop_event.clear()
         self.is_running = True
         self.start_btn.config(state=tk.DISABLED)
+        self.process_pending_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
         self.progress_var.set(0)
         self.progress_label.config(text="กำลังประมวลผล...")
@@ -498,6 +509,119 @@ class NextSyncApp(tk.Tk):
         finally:
             self.is_running = False
             self.after(0, lambda: self.start_btn.config(state=tk.NORMAL))
+            self.after(0, lambda: self.process_pending_btn.config(state=tk.NORMAL))
+            self.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
+
+    def _start_processing_pending(self):
+        cfg = self._collect_config()
+        self.config_data = cfg
+        save_config(cfg)
+
+        # Set env vars
+        if cfg.get("database_url"):
+            os.environ["DATABASE_URL"] = cfg["database_url"]
+        for k in ["r2_account_id", "r2_access_key_id", "r2_secret_access_key",
+                  "r2_bucket_name", "r2_public_url"]:
+            env_key = k.upper()
+            if cfg.get(k):
+                os.environ[env_key] = cfg[k]
+        if cfg.get("face_api_url"):
+            os.environ["FACE_API_URL"] = cfg["face_api_url"]
+        if cfg.get("face_api_secret"):
+            os.environ["FACE_API_SECRET"] = cfg["face_api_secret"]
+
+        event_id = cfg.get("event_id", "").strip()
+
+        if not os.environ.get("DATABASE_URL"):
+            messagebox.showerror("Error", "กรุณาระบุ DATABASE_URL")
+            return
+
+        self.stop_event.clear()
+        self.is_running = True
+        self.start_btn.config(state=tk.DISABLED)
+        self.process_pending_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.progress_var.set(0)
+        self.progress_label.config(text="กำลังประมวลผลรูปที่ค้าง...")
+
+        self.log("─" * 60)
+        self.log(f"🚀 เริ่มประมวลผลรูปภาพค้างในระบบ | Event={event_id or 'ทุก Event'}", "info")
+
+        self.pipeline_thread = threading.Thread(
+            target=self._run_processing_pending_thread,
+            args=(event_id,),
+            daemon=True
+        )
+        self.pipeline_thread.start()
+
+    def _run_processing_pending_thread(self, event_id):
+        import subprocess
+        try:
+            # We want to run: npx tsx scripts/process-all-pending.ts [event_id]
+            cmd = ["npx", "tsx", "scripts/process-all-pending.ts"]
+            if event_id:
+                cmd.append(event_id)
+
+            # Build command string for logs
+            cmd_str = " ".join(cmd)
+            self.log(f"💻 เรียกใช้คำสั่ง: {cmd_str}", "info")
+
+            # Run process and capture output in real-time
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                shell=True,
+                bufsize=1
+            )
+
+            # Monitor progress
+            while True:
+                if self.stop_event.is_set():
+                    self.log("⏹ ส่งสัญญาณหยุดการทำงาน...", "warning")
+                    # Terminate process and all its children on Windows
+                    subprocess.call(f"taskkill /F /T /PID {process.pid}", shell=True)
+                    break
+
+                line = process.stdout.readline()
+                if not line:
+                    break
+
+                line_str = line.strip()
+                if line_str:
+                    # Clean up warning statements from CLI to keep logs clean
+                    if "Warning: SECURITY WARNING" in line_str or "verify-full" in line_str or "libpq" in line_str:
+                        continue
+                    self.log(line_str)
+                    
+                    # Try to parse progress from output (e.g. "Processed 15 photos. Remaining: 3452")
+                    if "Processed" in line_str and "Remaining:" in line_str:
+                        try:
+                            parts = line_str.split("Remaining:")
+                            remaining = int(parts[1].strip())
+                            self.after(0, lambda r=remaining: self.progress_label.config(text=f"กำลังประมวลผล... (เหลือ {r} รูป)"))
+                        except:
+                            pass
+
+            process.wait()
+            rc = process.returncode
+            if rc == 0:
+                self.log("\n🎉 ประมวลผลรูปภาพเสร็จสิ้นสมบูรณ์!", "success")
+                self.after(0, lambda: self.progress_var.set(100))
+                self.after(0, lambda: self.progress_label.config(text="✅ ประมวลผลเสร็จสิ้น!"))
+            else:
+                self.log(f"\n❌ การประมวลผลสิ้นสุดด้วยข้อผิดพลาด (Exit code: {rc})", "error")
+                self.after(0, lambda: self.progress_label.config(text=f"❌ เกิดข้อผิดพลาด (Exit code: {rc})"))
+
+        except Exception as e:
+            err_msg = str(e)
+            self.log(f"❌ เกิดข้อผิดพลาด: {err_msg}", "error")
+            self.after(0, lambda msg=err_msg: self.progress_label.config(text=f"❌ Error: {msg}"))
+        finally:
+            self.is_running = False
+            self.after(0, lambda: self.start_btn.config(state=tk.NORMAL))
+            self.after(0, lambda: self.process_pending_btn.config(state=tk.NORMAL))
             self.after(0, lambda: self.stop_btn.config(state=tk.DISABLED))
 
     def _stop_pipeline(self):

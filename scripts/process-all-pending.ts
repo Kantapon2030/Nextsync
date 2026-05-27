@@ -16,15 +16,20 @@ import { sql } from "drizzle-orm";
 
 async function main() {
   try {
+    const targetEventId = process.argv[2] || null;
     console.log("Locating all events with pending photos...");
-    const pendingEvents = await db
+    let pendingEvents = await db
       .select({ eventId: photos.eventId, count: sql<number>`count(*)` })
       .from(photos)
       .where(sql`status = 'pending'`)
       .groupBy(photos.eventId);
 
+    if (targetEventId) {
+      pendingEvents = pendingEvents.filter(item => item.eventId === targetEventId);
+    }
+
     if (pendingEvents.length === 0) {
-      console.log("No pending photos found in database!");
+      console.log(targetEventId ? `No pending photos found for event: ${targetEventId}` : "No pending photos found in database!");
       return;
     }
 
