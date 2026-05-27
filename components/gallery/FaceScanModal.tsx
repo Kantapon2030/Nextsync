@@ -1,20 +1,21 @@
 // components/gallery/FaceScanModal.tsx
-// Face scan modal for gallery — two modes:
-//   "search": captures face images → sends to /api/face/search (uses stored enrollment)
-//   "enroll": captures face images → sends to /api/face/enroll (3-angle ArcFace)
-// All face processing now happens server-side via the Python ArcFace microservice.
+// Face scan modal for gallery — upgraded with SOTA client-side auto-capture:
+//   "search": captures 1 face image automatically when centered
+//   "enroll": captures 3 face angles (มองตรง, หันซ้าย, หันขวา) automatically with screen flash & rainbow guides
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { Camera, RefreshCw, CheckCircle2, AlertCircle, X, Sparkles, UserCheck, Info } from "lucide-react";
+import { loadModels } from "@/lib/face";
+import * as faceapi from "face-api.js";
 
 type Angle = "ตรง" | "ซ้าย" | "ขวา";
 const ANGLES: Angle[] = ["ตรง", "ซ้าย", "ขวา"];
 const ANGLE_HINT: Record<Angle, string> = {
-  ตรง: "มองตรงเข้าหากล้อง",
-  ซ้าย: "หันหน้าเล็กน้อยไปทางซ้าย",
-  ขวา: "หันหน้าเล็กน้อยไปทางขวา",
+  ตรง: "มองตรงเข้าหากล้อง 😐",
+  ซ้าย: "หันหน้าเล็กน้อยไปทางซ้าย 👈",
+  ขวา: "หันหน้าเล็กน้อยไปทางขวา 👉",
 };
 
 interface FaceScanModalProps {
@@ -41,9 +42,18 @@ export function FaceScanModal({
   const { data: session, update } = useSession();
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const loopRef = useRef<number | null>(null);
+  const currentStepRef = useRef(0);
 
   const [camReady, setCamReady] = useState(false);
   const [camError, setCamError] = useState<string | null>(null);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+
+  // Auto-capture states
+  const [faceDetected, setFaceDetected] = useState(false);
+  const [faceCentered, setFaceCentered] = useState(false);
+  const [faceAngle, setFaceAngle] = useState<"ตรง" | "ซ้าย" | "ขวา" | "unknown">("unknown");
+  const [flashActive, setFlashActive] = useState(false);
 
   // For enroll mode: 3-angle capture
   const [step, setStep] = useState(0);
@@ -56,6 +66,22 @@ export function FaceScanModal({
 
   const [processing, setProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Sync step ref for animation frame closure
+  useEffect(() => {
+    currentStepRef.current = step;
+  }, [step]);
+
+  // Load faceapi models client-side
+  useEffect(() => {
+    if (!isOpen) return;
+    loadModels()
+      .then(() => setModelsLoaded(true))
+      .catch((err) => {
+        console.error("Failed to load face-api models client-side:", err);
+        setCamError("ไม่สามารถดาวน์โหลดไฟล์วิเคราะห์ใบหน้าได้ กรุณารีเฟรชหน้าเว็บ");
+      });
+  }, [isOpen]);
 
   // Start camera when modal opens
   useEffect(() => {
@@ -71,17 +97,27 @@ export function FaceScanModal({
     setErrorMsg(null);
     setCamReady(false);
     setCamError(null);
+    setFaceDetected(false);
+    setFaceCentered(false);
+    setFaceAngle("unknown");
+    setFlashActive(false);
 
     navigator.mediaDevices
       .getUserMedia({ video: { facingMode: "user", width: { ideal: 640 } }, audio: false })
       .then((stream) => {
-        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
         streamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
         setCamReady(true);
       })
-      .catch(() => {
-        if (!cancelled) setCamError("ไม่สามารถเปิดกล้องได้ กรุณาอนุญาตสิทธิ์กล้องในเบราว์เซอร์");
+      .catch((e) => {
+        console.error("Camera access error:", e);
+        if (!cancelled) setCamError("ไม่สามารถเปิดกล้องได้ กรุณาอนุญาตสิทธิ์การใช้กล้องในเบราว์เซอร์");
       });
 
     return () => {
@@ -93,6 +129,9 @@ export function FaceScanModal({
 
   const handleClose = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
+    if (loopRef.current) {
+      cancelAnimationFrame(loopRef.current);
+    }
     onClose();
   };
 
@@ -116,7 +155,8 @@ export function FaceScanModal({
       canvas.toBlob(
         (blob) => {
           if (!blob) return resolve(null);
-          const label = mode === "enroll" ? ANGLES[step] : "search";
+          const currentStep = currentStepRef.current;
+          const label = mode === "enroll" ? ANGLES[currentStep] : "search";
           const file = new File([blob], `face_${label}.jpg`, { type: "image/jpeg" });
           resolve(file);
         },
@@ -124,28 +164,14 @@ export function FaceScanModal({
         0.92
       );
     });
-  }, [step, camReady, mode]);
+  }, [camReady, mode]);
 
-  // ── ENROLL MODE CAPTURE ────────────────────────────────────────
-  const handleEnrollCapture = async () => {
-    const file = await captureFrame();
-    if (!file) return;
-
-    const previewUrl = URL.createObjectURL(file);
-    setCaptures((prev) => [...prev, file]);
-    setPreviews((prev) => [...prev, previewUrl]);
-    setStep((s) => s + 1);
-  };
-
-  const enrollDone = step >= ANGLES.length;
-
-  const handleEnrollSubmit = async () => {
-    if (captures.length === 0) return;
+  const handleEnrollSubmitWithFiles = async (filesToSubmit: File[]) => {
     setProcessing(true);
     setErrorMsg(null);
 
     const form = new FormData();
-    captures.forEach((f, i) => form.append(`image${i + 1}`, f));
+    filesToSubmit.forEach((f, i) => form.append(`image${i + 1}`, f));
 
     try {
       const res = await fetch("/api/face/enroll", { method: "POST", body: form });
@@ -156,19 +182,156 @@ export function FaceScanModal({
       onEnrollSuccess?.();
       handleClose();
     } catch (err: any) {
-      setErrorMsg(err.message ?? "เกิดข้อผิดพลาด");
+      setErrorMsg(err.message ?? "เกิดข้อผิดพลาดในการส่งข้อมูล");
     } finally {
       setProcessing(false);
     }
   };
 
-  // ── SEARCH MODE CAPTURE + SEARCH ────────────────────────────────
-  const handleSearchCapture = async () => {
+  // Trigger screen flash and store captured image
+  const triggerAutoCapture = useCallback(async () => {
+    // 1. Play Shutter flash effect
+    setFlashActive(true);
+    setTimeout(() => setFlashActive(false), 120);
+
     const file = await captureFrame();
     if (!file) return;
+
     const previewUrl = URL.createObjectURL(file);
-    setCaptureFile(file);
-    setCapturePreview(previewUrl);
+
+    if (mode === "enroll") {
+      setCaptures((prev) => {
+        const next = [...prev, file];
+        if (next.length === 3) {
+          // Auto submit when all 3 angles captured
+          setTimeout(() => {
+            handleEnrollSubmitWithFiles(next);
+          }, 800);
+        }
+        return next;
+      });
+      setPreviews((prev) => [...prev, previewUrl]);
+      setStep((s) => s + 1);
+    } else {
+      // Search mode: auto capture first centered face and trigger search
+      setCaptureFile(file);
+      setCapturePreview(previewUrl);
+    }
+  }, [captureFrame, mode]);
+
+  // Real-time Face Tracking Loop using client-side face-api.js
+  useEffect(() => {
+    if (!isOpen || !camReady || !modelsLoaded || !videoRef.current) return;
+
+    let active = true;
+    let stableFrames = 0;
+    const REQUIRED_STABLE_FRAMES = 8; // Face must be stable for 8 frames
+
+    const runLoop = async () => {
+      if (!active || !videoRef.current) return;
+
+      try {
+        const video = videoRef.current;
+        if (video.paused || video.ended || video.readyState < 2) {
+          loopRef.current = requestAnimationFrame(runLoop);
+          return;
+        }
+
+        const detection = await faceapi
+          .detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+          .withFaceLandmarks();
+
+        if (detection) {
+          setFaceDetected(true);
+          const box = detection.detection.box;
+          const videoWidth = video.videoWidth || 640;
+          const videoHeight = video.videoHeight || 480;
+
+          // Check if face is centered in the oval guide
+          const faceCenterX = box.x + box.width / 2;
+          const faceCenterY = box.y + box.height / 2;
+
+          const errorX = Math.abs(faceCenterX - videoWidth / 2) / videoWidth;
+          const errorY = Math.abs(faceCenterY - videoHeight / 2) / videoHeight;
+
+          // Centered parameters: face width must occupy 25%-50% of the screen
+          const isCentered = errorX < 0.16 && errorY < 0.18 && (box.width / videoWidth) > 0.25 && (box.width / videoWidth) < 0.50;
+          setFaceCentered(isCentered);
+
+          // Head yaw calculation
+          const landmarks = detection.landmarks;
+          const nose = landmarks.getNose()[3]; // nose tip
+          const leftJaw = landmarks.getJawOutline()[0];
+          const rightJaw = landmarks.getJawOutline()[16];
+
+          const distLeft = nose.x - leftJaw.x;
+          const distRight = rightJaw.x - nose.x;
+          const ratio = distLeft / distRight;
+
+          let angle: "ตรง" | "ซ้าย" | "ขวา" | "unknown" = "unknown";
+          if (ratio >= 0.76 && ratio <= 1.30) {
+            angle = "ตรง";
+          } else if (ratio < 0.65) {
+            angle = "ซ้าย"; // head turned left
+          } else if (ratio > 1.55) {
+            angle = "ขวา"; // head turned right
+          }
+          setFaceAngle(angle);
+
+          // Auto-trigger logic
+          if (isCentered) {
+            if (mode === "enroll") {
+              const currentStep = currentStepRef.current;
+              const targetAngle = ANGLES[currentStep];
+              if (angle === targetAngle) {
+                stableFrames++;
+                if (stableFrames >= REQUIRED_STABLE_FRAMES) {
+                  stableFrames = 0;
+                  triggerAutoCapture();
+                }
+              } else {
+                stableFrames = 0;
+              }
+            } else {
+              // Search mode: auto capture once centered
+              stableFrames++;
+              if (stableFrames >= REQUIRED_STABLE_FRAMES && !currentStepRef.current) {
+                stableFrames = 0;
+                triggerAutoCapture();
+              }
+            }
+          } else {
+            stableFrames = 0;
+          }
+
+        } else {
+          setFaceDetected(false);
+          setFaceCentered(false);
+          setFaceAngle("unknown");
+          stableFrames = 0;
+        }
+
+      } catch (err) {
+        console.error("Face detection loop error:", err);
+      }
+
+      if (active) {
+        loopRef.current = requestAnimationFrame(runLoop);
+      }
+    };
+
+    loopRef.current = requestAnimationFrame(runLoop);
+
+    return () => {
+      active = false;
+      if (loopRef.current) {
+        cancelAnimationFrame(loopRef.current);
+      }
+    };
+  }, [isOpen, camReady, modelsLoaded, mode, triggerAutoCapture]);
+
+  const handleEnrollSubmit = () => {
+    handleEnrollSubmitWithFiles(captures);
   };
 
   const handleSearch = async (enrollToo = false) => {
@@ -176,7 +339,6 @@ export function FaceScanModal({
     setErrorMsg(null);
 
     try {
-      // Optionally enroll while searching
       if (enrollToo && captureFile) {
         const enrollForm = new FormData();
         enrollForm.append("image1", captureFile);
@@ -184,7 +346,6 @@ export function FaceScanModal({
         if (enrollRes.ok) await update({ faceEnrolled: true });
       }
 
-      // Search using stored enrollment (server uses enrolled embedding)
       const res = await fetch("/api/face/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -211,9 +372,43 @@ export function FaceScanModal({
   if (!isOpen) return null;
 
   const currentAngle = ANGLES[Math.min(step, ANGLES.length - 1)];
+  const enrollDone = step >= ANGLES.length;
+
+  const getStatusHint = () => {
+    if (!modelsLoaded) return "กำลังดาวน์โหลดโมเดลวิเคราะห์ใบหน้า... ⚙️";
+    if (!camReady) return "กำลังเปิดกล้อง... 🎥";
+    if (!faceDetected) return "กรุณาจัดวางใบหน้าให้อยู่ในหน้าจอ 😐";
+    if (!faceCentered) return "กรุณาขยับใบหน้าเข้ามาให้อยู่ในกรอบประชิด 📐";
+
+    if (mode === "enroll") {
+      if (faceAngle !== currentAngle) {
+        return `กรุณา${ANGLE_HINT[currentAngle]}`;
+      }
+      return "ตำแหน่งและองศาถูกต้อง ค้างไว้สักครู่... 📸";
+    } else {
+      return "จัดวางตำแหน่งใบหน้าถูกต้อง... 📸";
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-[#060813]/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      
+      {/* Rainbow Glow & Shutter Flash styles */}
+      <style jsx global>{`
+        @keyframes rainbow-glow {
+          0% { box-shadow: 0 0 15px #ec4899, inset 0 0 10px #ec4899; border-color: #ec4899; }
+          20% { box-shadow: 0 0 15px #8b5cf6, inset 0 0 10px #8b5cf6; border-color: #8b5cf6; }
+          40% { box-shadow: 0 0 15px #06b6d4, inset 0 0 10px #06b6d4; border-color: #06b6d4; }
+          60% { box-shadow: 0 0 15px #10b981, inset 0 0 10px #10b981; border-color: #10b981; }
+          80% { box-shadow: 0 0 15px #f59e0b, inset 0 0 10px #f59e0b; border-color: #f59e0b; }
+          100% { box-shadow: 0 0 15px #ec4899, inset 0 0 10px #ec4899; border-color: #ec4899; }
+        }
+        .rainbow-border {
+          animation: rainbow-glow 3s linear infinite;
+          border-width: 3px !important;
+        }
+      `}</style>
+
       <div className="glass border border-[var(--border)] bg-[#0d0f1e]/95 max-w-lg w-full overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-250 select-none shadow-2xl">
 
         {/* Modal Header */}
@@ -221,7 +416,7 @@ export function FaceScanModal({
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-[var(--accent-blue)] fill-[var(--accent-blue)]/10" />
             <h3 className="font-bold text-white">
-              {mode === "search" ? "ค้นหารูปถ่ายด้วยใบหน้า" : "ลงทะเบียนใบหน้า (3 มุม)"}
+              {mode === "search" ? "ค้นหารูปถ่ายด้วยใบหน้า" : "ลงทะเบียนใบหน้าอัจฉริยะ (3 มุม)"}
             </h3>
           </div>
           <button
@@ -233,46 +428,68 @@ export function FaceScanModal({
         </div>
 
         <div className="p-6 flex-1 flex flex-col gap-4">
-          {/* Enroll mode: angle progress pills */}
+          
+          {/* Angle indicators */}
           {mode === "enroll" && (
-            <div className="flex justify-center gap-3">
+            <div className="flex justify-center gap-4">
               {ANGLES.map((a, i) => (
-                <div key={a} className="flex flex-col items-center gap-1">
-                  <div className={`h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-bold transition-all ${
+                <div key={a} className="flex flex-col items-center gap-1.5">
+                  <div className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
                     i < captures.length
-                      ? "bg-[var(--accent-green)] text-white"
+                      ? "bg-[var(--accent-green)] text-white shadow-[0_0_10px_rgba(34,197,94,0.4)]"
                       : i === step
-                      ? "bg-[var(--accent-blue)] text-white scale-110"
+                      ? "bg-[var(--accent-blue)] text-white scale-110 ring-4 ring-[var(--accent-blue)]/30"
                       : "bg-slate-800 text-slate-500"
                   }`}>
                     {i < captures.length ? "✓" : i + 1}
                   </div>
-                  <span className={`text-[8px] font-bold ${i < captures.length ? "text-[var(--accent-green)]" : i === step ? "text-[var(--accent-blue)]" : "text-slate-600"}`}>{a}</span>
+                  <span className={`text-[10px] font-bold ${
+                    i < captures.length
+                      ? "text-[var(--accent-green)]"
+                      : i === step
+                      ? "text-[var(--accent-blue)]"
+                      : "text-slate-500"
+                  }`}>
+                    {a === "ตรง" ? "มองตรง 😐" : a === "ซ้าย" ? "หันซ้าย 👈" : "หันขวา 👉"}
+                  </span>
                 </div>
               ))}
             </div>
           )}
 
-          {/* Camera Feed */}
-          <div className="relative aspect-[4/3] w-full rounded-2xl overflow-hidden border border-[var(--border)] bg-black/60 shadow-inner flex items-center justify-center">
+          {/* Camera Frame */}
+          <div className={`relative aspect-[4/3] w-full rounded-2xl overflow-hidden bg-black/60 shadow-inner flex items-center justify-center transition-all duration-300 ${
+            mode === "enroll" && faceCentered && faceAngle === currentAngle
+              ? "ring-4 ring-green-500 shadow-[0_0_25px_rgba(34,197,94,0.6)] border-transparent"
+              : faceDetected && !capturePreview
+              ? "rainbow-border border-transparent"
+              : "border border-[var(--border)]"
+          }`}>
+            
+            {/* Camera screen flash overlay */}
+            {flashActive && (
+              <div className="absolute inset-0 bg-white z-50 pointer-events-none transition-opacity duration-75 opacity-100" />
+            )}
 
             {/* Camera not ready */}
-            {!camReady && !camError && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950/90">
+            {(!camReady || !modelsLoaded) && !camError && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950/95 z-10">
                 <RefreshCw className="h-8 w-8 text-[var(--accent-purple)] animate-spin" />
-                <p className="text-xs font-semibold animate-pulse text-slate-300">กำลังเปิดกล้อง...</p>
+                <p className="text-xs font-semibold animate-pulse text-slate-300">
+                  {!modelsLoaded ? "กำลังดาวน์โหลดไฟล์วิเคราะห์ใบหน้า..." : "กำลังเริ่มต้นกล้อง..."}
+                </p>
               </div>
             )}
 
             {/* Camera error */}
             {camError && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950 text-center p-6">
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950 text-center p-6 z-10">
                 <AlertCircle className="h-10 w-10 text-yellow-500" />
                 <p className="text-xs text-slate-400 leading-relaxed">{camError}</p>
               </div>
             )}
 
-            {/* Live video (always rendered for srcObject assignment) */}
+            {/* Live Video */}
             <video
               ref={videoRef}
               autoPlay
@@ -284,39 +501,48 @@ export function FaceScanModal({
 
             {/* Search: captured preview */}
             {mode === "search" && capturePreview && (
-              <img src={capturePreview} alt="Captured" className="absolute inset-0 w-full h-full object-cover" />
+              <img src={capturePreview} alt="Captured" className="absolute inset-0 w-full h-full object-cover z-20" />
             )}
 
-            {/* Oval guide */}
+            {/* Oval Guide */}
             {camReady && !capturePreview && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="w-[160px] h-[210px] rounded-[50%] border-2 border-dashed border-white/40" />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                <div className={`w-[170px] h-[220px] rounded-[50%] border-2 transition-all duration-300 ${
+                  faceCentered
+                    ? "border-green-500 border-solid scale-102 bg-green-500/5 shadow-[0_0_20px_rgba(34,197,94,0.3)]"
+                    : faceDetected
+                    ? "border-yellow-400 border-dashed animate-pulse"
+                    : "border-white/30 border-dashed"
+                }`} />
               </div>
             )}
 
-            {/* Tip banner */}
-            {camReady && (
-              <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full text-[9px] font-semibold text-amber-300 flex items-center gap-1 select-none whitespace-nowrap">
-                <Info className="h-3 w-3" />
-                {mode === "enroll"
-                  ? ANGLE_HINT[currentAngle]
-                  : "แต่งหน้าคล้ายวันงานเพื่อผลลัพธ์ที่แม่นยำ"}
+            {/* Centered Guide Indicator Banner */}
+            {camReady && !capturePreview && (
+              <div className={`absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full text-xs font-bold flex items-center gap-2 select-none whitespace-nowrap z-20 transition-all duration-300 shadow-md ${
+                faceCentered && (mode === "search" || faceAngle === currentAngle)
+                  ? "bg-green-500/90 text-white animate-bounce"
+                  : faceDetected
+                  ? "bg-yellow-500/90 text-slate-950"
+                  : "bg-black/70 text-slate-300"
+              }`}>
+                {getStatusHint()}
               </div>
             )}
 
-            {/* Processing overlay */}
+            {/* Processing Overlay */}
             {processing && (
-              <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm flex flex-col items-center justify-center gap-2 text-white">
+              <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 text-white z-30">
                 <RefreshCw className="h-8 w-8 text-[var(--accent-purple)] animate-spin" />
                 <p className="text-xs font-medium text-slate-300">
-                  {mode === "enroll" ? "กำลังบันทึกใบหน้า..." : "กำลังค้นหา..."}
+                  {mode === "enroll" ? "กำลังประมวลผลและเข้ารหัสใบหน้า..." : "กำลังค้นหาใบหน้าในอัลบั้ม..."}
                 </p>
               </div>
             )}
 
             {/* Success check */}
             {!processing && (mode === "search" ? capturePreview : enrollDone) && (
-              <div className="absolute bottom-4 right-4 bg-[var(--accent-green)] text-white rounded-full p-1 shadow-lg">
+              <div className="absolute bottom-4 right-4 bg-[var(--accent-green)] text-white rounded-full p-1.5 shadow-lg z-20">
                 <CheckCircle2 className="h-6 w-6" />
               </div>
             )}
@@ -324,15 +550,17 @@ export function FaceScanModal({
 
           {/* Enroll: thumbnail strip */}
           {mode === "enroll" && previews.length > 0 && (
-            <div className="flex gap-2">
+            <div className="flex gap-3">
               {previews.map((url, i) => (
-                <div key={i} className="flex-1 aspect-square rounded-xl overflow-hidden border-2 border-[var(--accent-green)]">
+                <div key={i} className="flex-1 aspect-square rounded-2xl overflow-hidden border-2 border-[var(--accent-green)] shadow-md transition-all duration-300 hover:scale-105">
                   <img src={url} alt={ANGLES[i]} className="w-full h-full object-cover" />
                 </div>
               ))}
               {ANGLES.slice(previews.length).map((a) => (
-                <div key={a} className="flex-1 aspect-square rounded-xl border-2 border-dashed border-[var(--border)] flex items-center justify-center bg-[var(--surface)]">
-                  <span className="text-[8px] font-bold text-[var(--text3)]">{a}</span>
+                <div key={a} className="flex-1 aspect-square rounded-2xl border-2 border-dashed border-[var(--border)] flex items-center justify-center bg-[var(--surface)] text-[var(--text3)]">
+                  <span className="text-[10px] font-bold text-center leading-tight">
+                    {a === "ตรง" ? "มองตรง" : a === "ซ้าย" ? "หันซ้าย" : "หันขวา"}
+                  </span>
                 </div>
               ))}
             </div>
@@ -349,17 +577,12 @@ export function FaceScanModal({
 
         {/* Modal Footer */}
         <div className="p-5 border-t border-[var(--border)] bg-black/40 flex gap-3">
-
+          
           {/* ENROLL MODE CONTROLS */}
           {mode === "enroll" && !enrollDone && (
-            <button
-              onClick={handleEnrollCapture}
-              disabled={!camReady || processing}
-              className="flex-1 py-3 bg-gradient-to-r from-[var(--accent-blue)] to-[var(--accent-purple)] hover:brightness-110 disabled:opacity-50 text-white font-bold rounded-2xl text-sm transition-all flex items-center justify-center gap-2"
-            >
-              <Camera className="h-4 w-4" />
-              <span>ถ่ายหน้า{currentAngle} ({step + 1}/3)</span>
-            </button>
+            <div className="w-full text-center text-xs font-medium text-slate-400 py-2">
+              💡 กรุณาจัดใบหน้าให้อยู่ในกรอบประชิดและหันตามมุมที่ระบุ ระบบจะจับภาพอัตโนมัติ
+            </div>
           )}
 
           {mode === "enroll" && enrollDone && (
@@ -369,12 +592,12 @@ export function FaceScanModal({
                 disabled={processing}
                 className="flex-1 py-3 bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface-hover)] text-white font-bold rounded-2xl text-sm transition-all"
               >
-                ถ่ายใหม่
+                สแกนใหม่
               </button>
               <button
                 onClick={handleEnrollSubmit}
                 disabled={processing}
-                className="flex-[2] py-3 bg-[var(--accent-green)] hover:brightness-110 disabled:opacity-70 text-white font-bold rounded-2xl text-sm transition-all flex items-center justify-center gap-1.5"
+                className="flex-[2] py-3 bg-[var(--accent-green)] hover:brightness-110 disabled:opacity-70 text-white font-bold rounded-2xl text-sm transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(34,197,94,0.4)]"
               >
                 <UserCheck className="h-4 w-4" />
                 <span>บันทึกใบหน้าลงระบบ</span>
@@ -384,14 +607,9 @@ export function FaceScanModal({
 
           {/* SEARCH MODE CONTROLS */}
           {mode === "search" && !capturePreview && (
-            <button
-              onClick={handleSearchCapture}
-              disabled={!camReady || processing}
-              className="flex-1 py-3 bg-gradient-to-r from-[var(--accent-blue)] to-[var(--accent-purple)] hover:brightness-110 disabled:opacity-50 text-white font-bold rounded-2xl text-sm transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
-            >
-              <Camera className="h-4 w-4" />
-              <span>ถ่ายรูปสแกนใบหน้า</span>
-            </button>
+            <div className="w-full text-center text-xs font-medium text-slate-400 py-2">
+              💡 ขยับใบหน้าของคุณมาตรงกลางกรอบ ระบบจะจับภาพและสแกนค้นหารูปภาพอัตโนมัติ
+            </div>
           )}
 
           {mode === "search" && capturePreview && !processing && (
@@ -400,7 +618,7 @@ export function FaceScanModal({
                 onClick={() => { setCaptureFile(null); setCapturePreview(null); }}
                 className="flex-1 py-3 bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface-hover)] text-white font-bold rounded-2xl text-sm transition-all"
               >
-                ถ่ายรูปใหม่
+                สแกนใหม่
               </button>
 
               <div className="flex-[2] flex flex-col gap-2">
