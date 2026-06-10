@@ -38,7 +38,19 @@ async function main() {
       const filePath = path.join(migrationsDir, file);
       console.log(`Running migration: ${file}...`);
       const sql = fs.readFileSync(filePath, "utf8");
-      await client.query(sql);
+      
+      // Split SQL file by semicolons followed by whitespace/newlines
+      // or at the end of the string to execute statements individually.
+      // This is required to support CREATE INDEX CONCURRENTLY which
+      // cannot be executed inside a multi-statement transaction block.
+      const statements = sql
+        .split(/;(?:\s*[\r\n]+|$)/)
+        .map((stmt) => stmt.trim())
+        .filter((stmt) => stmt.length > 0);
+
+      for (const statement of statements) {
+        await client.query(statement);
+      }
       console.log(`✓ ${file} executed successfully!`);
     }
     console.log("✓ All database migrations completed successfully!");

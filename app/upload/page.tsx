@@ -58,7 +58,7 @@ export default function UploadPage() {
   // Protect route: photographer & admin access only
   useEffect(() => {
     if (status === "unauthenticated") {
-      router.push("/auth/photographer");
+      router.push("/auth/login");
     } else if (status === "authenticated" && session?.user?.role === "student") {
       router.push("/");
     }

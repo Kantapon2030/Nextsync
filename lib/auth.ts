@@ -1,7 +1,6 @@
 // lib/auth.ts
 import NextAuth from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import GoogleProvider from "next-auth/providers/google";
 import { db, users } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import bcrypt from "bcryptjs";
@@ -10,10 +9,6 @@ import { authConfig } from "../auth.config";
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
   providers: [
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    }),
     CredentialsProvider({
       name: "credentials",
       credentials: {
@@ -62,47 +57,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
   callbacks: {
     ...authConfig.callbacks,
-    async jwt({ token, user, trigger, session, account }) {
+    async jwt({ token, user, trigger, session }) {
       if (user) {
-        if (account?.provider === "google") {
-          const email = user.email || "";
-          const studentId = email.split("@")[0] || `g_${user.id}`;
-          
-          try {
-            // Find user in database
-            const userList = await db.select().from(users).where(eq(users.studentId, studentId)).limit(1);
-            let dbUser;
-            if (userList.length === 0) {
-              // Auto-create on Google sign-in
-              const dummyHash = await bcrypt.hash(Math.random().toString(36), 10);
-              const [insertedUser] = await db.insert(users).values({
-                studentId,
-                passwordHash: dummyHash,
-                displayName: user.name || studentId,
-                role: "student",
-                faceEnrolled: false,
-              }).returning();
-              dbUser = insertedUser;
-            } else {
-              dbUser = userList[0];
-            }
-
-            token.id = dbUser.id;
-            token.studentId = dbUser.studentId;
-            token.role = dbUser.role;
-            token.faceEnrolled = dbUser.faceEnrolled || false;
-            token.name = dbUser.displayName;
-          } catch (error) {
-            console.error("Error in Google Auth callback:", error);
-          }
-        } else {
-          // From Credentials authorize
-          token.id = user.id;
-          token.studentId = user.studentId;
-          token.role = user.role;
-          token.faceEnrolled = user.faceEnrolled;
-          token.name = user.name;
-        }
+        // From Credentials authorize
+        token.id = user.id;
+        token.studentId = user.studentId;
+        token.role = user.role;
+        token.faceEnrolled = user.faceEnrolled;
+        token.name = user.name;
       }
 
       // Handle dynamic session updates

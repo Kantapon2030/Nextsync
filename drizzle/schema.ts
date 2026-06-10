@@ -9,7 +9,8 @@ import {
   doublePrecision, 
   date, 
   customType,
-  pgEnum
+  pgEnum,
+  index
 } from "drizzle-orm/pg-core";
 import { sql, relations } from "drizzle-orm";
 
@@ -100,7 +101,9 @@ export const events = pgTable("events", {
   lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
   syncStatus: text("sync_status").default("idle"),
   uploadOpen: boolean("upload_open").default(true),
-});
+}, (table) => ({
+  eventsIsActiveIdx: index("events_is_active_idx").on(table.isActive),
+}));
 
 // ─────────────────────────────────────────
 // PHOTOS
@@ -141,7 +144,11 @@ export const photos = pgTable("photos", {
   // Timestamps
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   processedAt: timestamp("processed_at", { withTimezone: true }),
-});
+}, (table) => ({
+  photosStatusIdx: index("photos_status_idx").on(table.status),
+  photosEventIdIdx: index("photos_event_id_idx").on(table.eventId),
+  photosSeasonIdIdx: index("photos_season_id_idx").on(table.seasonId),
+}));
 
 // ─────────────────────────────────────────
 // PHOTO FACE EMBEDDINGS (faces found in photos)
@@ -158,7 +165,11 @@ export const photoFaceEmbeddings = pgTable("photo_face_embeddings", {
   bboxH: doublePrecision("bbox_h"),
   confidence: doublePrecision("confidence"),
   model: text("model").default("ArcFace"),     // Model version tracking
-});
+}, (table) => ({
+  photoFaceHnswIdx: index("photo_face_hnsw_idx")
+    .on(table.embedding)
+    .using(sql`hnsw (${table.embedding} vector_cosine_ops) WITH (m = 16, ef_construction = 64)`),
+}));
 
 // ─────────────────────────────────────────
 // FILTER THRESHOLDS (global)

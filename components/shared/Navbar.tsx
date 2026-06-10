@@ -166,6 +166,14 @@ export function Navbar() {
                         <span>แผงควบคุม</span>
                       </Link>
                     )}
+                    <Link
+                      href="/settings"
+                      onClick={() => setIsDropdownOpen(false)}
+                      className="flex items-center gap-2 w-full px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface-hover)] rounded-lg transition-colors text-left"
+                    >
+                      <Sliders className="h-4 w-4" />
+                      <span>ตั้งค่าบัญชี</span>
+                    </Link>
                     <button
                       onClick={() => {
                         setIsDropdownOpen(false);
@@ -181,20 +189,6 @@ export function Navbar() {
               </div>
             ) : (
               <div className="flex items-center gap-3">
-                <Link
-                  href="/auth/photographer"
-                  style={{
-                    background: "transparent",
-                    border: "1px solid rgba(255,255,255,0.15)",
-                    borderRadius: "8px",
-                    padding: "7px 16px",
-                    fontSize: "13px",
-                    color: "rgba(255,255,255,0.55)"
-                  }}
-                  className="transition-colors hover:border-[rgba(255,255,255,0.3)] hover:text-white"
-                >
-                  เข้าสู่ระบบช่างภาพ
-                </Link>
                 <Link
                   href="/auth/login"
                   className="glass px-4 py-1.5 text-xs font-semibold text-[var(--text)] hover:border-[var(--border-hover)] hover:bg-[var(--surface-hover)] transition-all"
@@ -268,6 +262,20 @@ export function Navbar() {
                     </Link>
                   );
                 })}
+                {session && (
+                  <Link
+                    href="/settings"
+                    onClick={() => setIsOpen(false)}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                      pathname === "/settings" 
+                        ? "text-[var(--text)] bg-[var(--surface-hover)] font-semibold border-l-4 border-[var(--accent-blue)]" 
+                        : "text-[var(--text2)] hover:bg-[var(--surface)]"
+                    }`}
+                  >
+                    <Sliders className="h-4 w-4" />
+                    <span>ตั้งค่าบัญชี</span>
+                  </Link>
+                )}
               </nav>
             </div>
             
@@ -284,13 +292,6 @@ export function Navbar() {
               </button>
             ) : (
               <div className="flex flex-col gap-2">
-                <Link
-                  href="/auth/photographer"
-                  onClick={() => setIsOpen(false)}
-                  className="flex items-center justify-center text-sm font-semibold text-[var(--text2)] hover:text-[var(--text)] border border-[var(--border)] rounded-xl py-2.5 bg-[var(--surface)]"
-                >
-                  เข้าสู่ระบบช่างภาพ
-                </Link>
                 <Link
                   href="/auth/login"
                   onClick={() => setIsOpen(false)}

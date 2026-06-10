@@ -5,6 +5,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useSession } from "next-auth/react";
 import { Camera, RefreshCw, CheckCircle2, AlertCircle, X, Sparkles, UserCheck, Info } from "lucide-react";
 import { loadModels } from "@/lib/face";
@@ -14,8 +15,8 @@ type Angle = "ตรง" | "ซ้าย" | "ขวา";
 const ANGLES: Angle[] = ["ตรง", "ซ้าย", "ขวา"];
 const ANGLE_HINT: Record<Angle, string> = {
   ตรง: "มองตรงเข้าหากล้อง 😐",
-  ซ้าย: "หันหน้าเล็กน้อยไปทางซ้าย 👈",
-  ขวา: "หันหน้าเล็กน้อยไปทางขวา 👉",
+  ซ้าย: "หันหน้าเล็กน้อยไปทางซ้าย 👉",
+  ขวา: "หันหน้าเล็กน้อยไปทางขวา 👈",
 };
 const REQUIRED_STABLE_FRAMES = 8;
 
@@ -47,6 +48,12 @@ export function FaceScanModal({
   const currentStepRef = useRef(0);
 
   const [camReady, setCamReady] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
   const [camError, setCamError] = useState<string | null>(null);
   const [modelsLoaded, setModelsLoaded] = useState(false);
 
@@ -282,9 +289,9 @@ export function FaceScanModal({
             if (ratio >= 0.76 && ratio <= 1.30) {
               angle = "ตรง";
             } else if (ratio < 0.65) {
-              angle = "ซ้าย"; // head turned left
-            } else if (ratio > 1.55) {
               angle = "ขวา"; // head turned right
+            } else if (ratio > 1.55) {
+              angle = "ซ้าย"; // head turned left
             }
             setFaceAngle(angle);
 
@@ -388,6 +395,7 @@ export function FaceScanModal({
   };
 
   if (!isOpen) return null;
+  if (!mounted) return null;
 
   const currentAngle = ANGLES[Math.min(step, ANGLES.length - 1)];
   const enrollDone = step >= ANGLES.length;
@@ -432,8 +440,8 @@ export function FaceScanModal({
 
     if (mode === "enroll") {
       if (faceAngle !== currentAngle) {
-        const handEmoji = currentAngle === "ตรง" ? "😐" : currentAngle === "ซ้าย" ? "👈" : "👉";
-        const anim = currentAngle === "ตรง" ? "animate-heartbeat" : currentAngle === "ซ้าย" ? "animate-slide-left" : "animate-slide-right";
+        const handEmoji = currentAngle === "ตรง" ? "😐" : currentAngle === "ซ้าย" ? "👉" : "👈";
+        const anim = currentAngle === "ตรง" ? "animate-heartbeat" : currentAngle === "ซ้าย" ? "animate-slide-right" : "animate-slide-left";
         return {
           emoji: handEmoji,
           animateClass: anim,
@@ -443,8 +451,8 @@ export function FaceScanModal({
         };
       }
       return {
-        emoji: currentAngle === "ตรง" ? "😐" : currentAngle === "ซ้าย" ? "👈" : "👉",
-        animateClass: currentAngle === "ตรง" ? "animate-heartbeat" : currentAngle === "ซ้าย" ? "animate-slide-left" : "animate-slide-right",
+        emoji: currentAngle === "ตรง" ? "😐" : currentAngle === "ซ้าย" ? "👉" : "👈",
+        animateClass: currentAngle === "ตรง" ? "animate-heartbeat" : currentAngle === "ซ้าย" ? "animate-slide-right" : "animate-slide-left",
         label: "ตำแหน่งถูกต้อง",
         text: "เยี่ยม! ตรึงใบหน้านิ่งไว้สักครู่... 📸",
         color: "#22c55e"
@@ -460,7 +468,7 @@ export function FaceScanModal({
     }
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 bg-[#060813]/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       
       {/* Premium Sci-Fi Visual Effects & Animations */}
@@ -579,7 +587,7 @@ export function FaceScanModal({
                       ? "text-[var(--accent-blue)]"
                       : "text-slate-500"
                   }`}>
-                    {a === "ตรง" ? "มองตรง 😐" : a === "ซ้าย" ? "หันซ้าย 👈" : "หันขวา 👉"}
+                    {a === "ตรง" ? "มองตรง 😐" : a === "ซ้าย" ? "หันซ้าย 👉" : "หันขวา 👈"}
                   </span>
                 </div>
               ))}
@@ -823,7 +831,8 @@ export function FaceScanModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

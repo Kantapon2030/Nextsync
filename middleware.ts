@@ -29,10 +29,7 @@ export default auth((req) => {
     nextUrl.pathname.startsWith("/admin");
 
   if (isProtectedRoute && !isLoggedIn) {
-    // Redirect to photographer auth page if trying to access photographer routes, otherwise student login
-    const isPhotographerPath = nextUrl.pathname.startsWith("/upload") || nextUrl.pathname.startsWith("/my-uploads");
-    const targetLoginPath = isPhotographerPath ? "/auth/photographer" : "/auth/login";
-    const loginUrl = new URL(targetLoginPath, nextUrl);
+    const loginUrl = new URL("/auth/login", nextUrl);
     loginUrl.searchParams.set("next", nextUrl.pathname);
     return NextResponse.redirect(loginUrl);
   }

@@ -800,7 +800,7 @@ body::after {
 
 .sync-letter-nav {
   display: inline-block;
-  font-weight: 700;
+  font-weight: 800;
   text-shadow: 0 0 4px currentColor;
   will-change: transform;
   animation: navLetterWave 3s cubic-bezier(0.4,0,0.2,1) infinite;
@@ -812,7 +812,7 @@ body::after {
 
 .sync-letter-hero {
   display: inline-block;
-  font-weight: 700;
+  font-weight: 800;
   text-shadow: 0 0 8px currentColor;
   will-change: transform;
   animation: heroLetterGlow 4s cubic-bezier(0.4,0,0.2,1) infinite;
@@ -822,10 +822,10 @@ body::after {
   50%      { transform: translateY(-4px); }
 }
 
-/* Nextsync wordmark — Plus Jakarta Sans, tight professional tracking */
+/* Nextsync wordmark — Poppins ExtraBold, tight professional tracking */
 .nextsync-wordmark {
-  font-family: 'Plus Jakarta Sans', 'Outfit', 'Noto Sans Thai', sans-serif;
-  font-weight: 700;
+  font-family: 'Poppins', 'Plus Jakarta Sans', sans-serif;
+  font-weight: 800;
   letter-spacing: -0.03em;
   line-height: 1;
   white-space: nowrap;
@@ -843,11 +843,11 @@ body::after {
 }
 .nextsync-wordmark-next {
   color: #ffffff;
-  font-weight: 600;
+  font-weight: 800;
 }
 .nextsync-wordmark-sync {
   display: inline;
-  font-weight: 700;
+  font-weight: 800;
 }
 
 .feature-card-spotlight {

@@ -11,9 +11,9 @@ type Angle = "ตรง" | "ซ้าย" | "ขวา";
 const ANGLES: Angle[] = ["ตรง", "ซ้าย", "ขวา"];
 
 const ANGLE_HINT: Record<Angle, string> = {
-  ตรง: "มองตรงเข้าหากล้อง รักษาระยะห่าง 40–60 ซม.",
-  ซ้าย: "หันหน้าเล็กน้อยไปทางซ้าย (~30°)",
-  ขวา: "หันหน้าเล็กน้อยไปทางขวา (~30°)",
+  ตรง: "มองตรงเข้าหากล้อง รักษาระยะห่าง 40–60 ซม. 😐",
+  ซ้าย: "หันหน้าเล็กน้อยไปทางซ้าย (~30°) 👉",
+  ขวา: "หันหน้าเล็กน้อยไปทางขวา (~30°) 👈",
 };
 
 const ANGLE_COLOR: Record<Angle, string> = {
@@ -248,20 +248,20 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
                 borderColor: `${accentColor}80`,
                 transform:
                   currentAngle === "ซ้าย"
-                    ? "translateX(-30px) rotate(-10deg)"
-                    : currentAngle === "ขวา"
                     ? "translateX(30px) rotate(10deg)"
+                    : currentAngle === "ขวา"
+                    ? "translateX(-30px) rotate(-10deg)"
                     : "none",
               }}
             >
               {currentAngle === "ซ้าย" && (
-                <div className="absolute -left-12 bg-black/75 text-white border border-slate-700 px-2 py-1 rounded text-[10px] font-bold animate-bounce shadow">
-                  ← หันซ้าย
+                <div className="absolute -right-12 bg-black/75 text-white border border-slate-700 px-2 py-1 rounded text-[10px] font-bold animate-bounce shadow">
+                  หันซ้าย →
                 </div>
               )}
               {currentAngle === "ขวา" && (
-                <div className="absolute -right-12 bg-black/75 text-white border border-slate-700 px-2 py-1 rounded text-[10px] font-bold animate-bounce shadow">
-                  หันขวา →
+                <div className="absolute -left-12 bg-black/75 text-white border border-slate-700 px-2 py-1 rounded text-[10px] font-bold animate-bounce shadow">
+                  ← หันขวา
                 </div>
               )}
             </div>

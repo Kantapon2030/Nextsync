@@ -17,15 +17,14 @@ export default function LoginPage() {
   const [studentId, setStudentId] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleCredentialsLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    if (studentId.length !== 5 || !/^\d+$/.test(studentId)) {
-      setError("รหัสนักเรียนต้องเป็นตัวเลข 5 หลักเท่านั้น");
+    if (!studentId.trim()) {
+      setError("กรุณากรอกรหัสผู้ใช้งาน");
       return;
     }
     if (!password) {
@@ -42,7 +41,7 @@ export default function LoginPage() {
       });
 
       if (res?.error) {
-        setError("รหัสนักเรียนหรือรหัสผ่านไม่ถูกต้อง");
+        setError("รหัสผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง");
         setLoading(false);
         return;
       }
@@ -55,19 +54,6 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
-
-  const handleGoogleLogin = async () => {
-    setGoogleLoading(true);
-    setError(null);
-    try {
-      await signIn("google", { callbackUrl: next });
-    } catch (err) {
-      console.error(err);
-      setError("ไม่สามารถเข้าสู่ระบบด้วย Google ได้");
-      setGoogleLoading(false);
-    }
-  };
-
 
   return (
     <div className="relative min-h-[calc(100vh-4rem)] flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
@@ -85,7 +71,7 @@ export default function LoginPage() {
           </div>
           <div className="space-y-1">
             <h2 className="text-xl font-bold text-[var(--text)] tracking-tight">เข้าสู่ระบบ</h2>
-            <p className="text-xs text-[var(--text2)]">สำหรับผู้ใช้งานทั่วไป / นักเรียน</p>
+            <p className="text-xs text-[var(--text2)]">สำหรับผู้ใช้งานทั่วไป, นักเรียน และช่างภาพ</p>
           </div>
         </div>
 
@@ -96,57 +82,17 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* PRIMARY Google Login Button */}
-        <button
-          onClick={handleGoogleLogin}
-          disabled={googleLoading || loading}
-          className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white hover:bg-slate-100 text-slate-900 font-semibold text-sm rounded-xl transition-all shadow-md"
-        >
-          {googleLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin text-slate-800" />
-          ) : (
-            <svg className="h-4 w-4" viewBox="0 0 24 24" width="24" height="24">
-              <path
-                fill="#4285F4"
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-              />
-              <path
-                fill="#EA4335"
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-              />
-            </svg>
-          )}
-          <span>เข้าสู่ระบบด้วย Google</span>
-        </button>
-
-        {/* Divider */}
-        <div className="relative flex items-center justify-center my-4">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-[var(--border)]" />
-          </div>
-          <span className="relative px-3 bg-[#080A12] text-xs text-[var(--text3)] uppercase font-semibold">หรือ</span>
-        </div>
-
         {/* Credentials Form */}
         <form onSubmit={handleCredentialsLogin} className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold text-[var(--text2)] uppercase tracking-wider">รหัสนักเรียน 5 หลัก</label>
+            <label className="text-[11px] font-bold text-[var(--text2)] uppercase tracking-wider">รหัสผู้ใช้งาน (Username / รหัสนักเรียน)</label>
             <div className="relative">
               <User className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--text3)]" />
               <input
                 type="text"
-                maxLength={5}
                 value={studentId}
-                onChange={(e) => setStudentId(e.target.value.replace(/\D/g, ""))}
-                placeholder="กรอกรหัส 5 หลัก เช่น 00000"
+                onChange={(e) => setStudentId(e.target.value)}
+                placeholder="กรอกรหัสนักเรียน 5 หลัก หรือ รหัสช่างภาพ"
                 className="w-full bg-[var(--surface)] hover:bg-[var(--surface-hover)] border border-[var(--border)] text-[var(--text)] text-xs font-semibold rounded-xl pl-11 pr-4 py-3 focus:outline-none focus:border-[var(--accent-purple)] transition-all"
                 required
               />
@@ -170,7 +116,7 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            disabled={loading || googleLoading}
+            disabled={loading}
             className="w-full py-3.5 bg-gradient-to-r from-[var(--accent-blue)] to-[var(--accent-purple)] hover:brightness-110 disabled:from-gray-800 disabled:to-gray-800 text-white font-semibold rounded-xl transition-all shadow-md flex items-center justify-center gap-2 text-sm"
           >
             {loading ? (
@@ -186,15 +132,15 @@ export default function LoginPage() {
 
         <div className="pt-4 border-t border-[var(--border)] text-center space-y-2">
           <p className="text-xs text-[var(--text2)]">
-            ยังไม่มีบัญชี?{" "}
+            ยังไม่มีบัญชีนักเรียน?{" "}
             <Link href="/auth/register" className="text-[var(--accent-blue)] hover:underline font-semibold">
               สมัครสมาชิกที่นี่
             </Link>
           </p>
           <p className="text-xs text-[var(--text3)]">
-            ช่างภาพ?{" "}
+            ช่างภาพยังไม่มีบัญชี?{" "}
             <Link href="/auth/photographer" className="text-[var(--accent-purple)] hover:underline font-semibold">
-              เข้าสู่ระบบช่างภาพที่นี่
+              ลงทะเบียนช่างภาพที่นี่
             </Link>
           </p>
         </div>

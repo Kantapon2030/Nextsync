@@ -2,36 +2,38 @@ import sys
 import io
 import os
 import gc
+import time
 import traceback
 import asyncio
 
+# ─── Platform detection ───────────────────────────────────────────────────────
 is_render = os.getenv("RENDER", "false").lower() == "true"
+is_hf     = os.getenv("SPACE_ID") is not None  # Hugging Face Spaces sets SPACE_ID
 
-# ─── TensorFlow CPU Memory/Threading Optimization ───────────────────────────
-# Set environment variables BEFORE importing deepface / tensorflow
+# ─── TensorFlow CPU Memory/Threading Optimization ────────────────────────────
+# Must be set BEFORE importing deepface / tensorflow
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-os.environ["TF_USE_LEGACY_KERAS"] = "1"
+os.environ["TF_USE_LEGACY_KERAS"]  = "1"
 
 if is_render:
-    # Restrict to 1 core only on Render to prevent OOM
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
-    os.environ["TF_NUM_INTEROP_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
+    # Restrict to 1 core only on Render to prevent OOM (512 MB free tier)
+    os.environ["OMP_NUM_THREADS"]          = "1"
+    os.environ["TF_NUM_INTRAOP_THREADS"]   = "1"
+    os.environ["TF_NUM_INTEROP_THREADS"]   = "1"
+    os.environ["MKL_NUM_THREADS"]          = "1"
 
-# Force stdout and stderr to use UTF-8 encoding on Windows to prevent UnicodeEncodeErrors with emojis
-if sys.platform.startswith('win'):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+# ─── UTF-8 stdout on Windows ──────────────────────────────────────────────────
+if sys.platform.startswith("win"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+# ─── TensorFlow initialisation ────────────────────────────────────────────────
 try:
     import tensorflow as tf
     if is_render:
-        # Limit runtime threading for low-RAM containers
         tf.config.threading.set_inter_op_parallelism_threads(1)
         tf.config.threading.set_intra_op_parallelism_threads(1)
-    # Disable GPU memory pre-allocation (prevent GPU growth leaks if running on system with GPU)
-    gpus = tf.config.list_physical_devices('GPU')
+    gpus = tf.config.list_physical_devices("GPU")
     if gpus:
         for gpu in gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
@@ -44,35 +46,85 @@ from deepface import DeepFace
 import numpy as np
 import cv2
 
+# ─── Config from environment ──────────────────────────────────────────────────
 FACE_API_SECRET = os.getenv("FACE_API_SECRET", "")
 
-app = FastAPI(title="Nextsync Face API", version="2.0.0")
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").strip()
+if not allowed_origins_env:
+    allowed_origins_env = "http://localhost:3000"
+allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+
+MODEL_NAME      = "ArcFace"  # 512-dim, best accuracy
+default_detector = "ssd" if is_render else "retinaface"
+DETECTOR         = os.getenv("DETECTOR_BACKEND", default_detector)
+DISTANCE_METRIC  = "cosine"
+
+# ─── Global state ─────────────────────────────────────────────────────────────
+_model_ready  = False
+_startup_time = time.time()
+face_lock     = asyncio.Lock()   # serialise heavy ops to prevent RAM spikes
+
+# ─── FastAPI app ──────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="ShotSync Face API",
+    version="3.0.0",
+    description="ArcFace face enrollment & search — optimised for Hugging Face Spaces",
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["POST", "GET"],
-    allow_headers=["*"],
+    allow_origins=allowed_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
+# ─── Startup: preload ArcFace model once ──────────────────────────────────────
+@app.on_event("startup")
+async def startup_event():
+    """
+    Preload ArcFace model at startup so the first real request is instant.
+    The model weights are already baked into the Docker image (build-time RUN),
+    so this is just TF graph initialisation, not a network download.
+    """
+    global _model_ready
+    print(f"[STARTUP] Platform  : {'Hugging Face Spaces' if is_hf else ('Render' if is_render else 'Local')}")
+    print(f"[STARTUP] CORS origins: {allowed_origins}")
+    print(f"[STARTUP] Detector  : {DETECTOR}")
+    print(f"[STARTUP] Preloading ArcFace model...")
+
+    try:
+        # Build the Keras model graph in the main process (avoids cold-start on worker)
+        DeepFace.build_model(MODEL_NAME)
+        _model_ready = True
+        print(f"[STARTUP] ArcFace model ready ✓ (took {time.time() - _startup_time:.1f}s)")
+    except Exception as exc:
+        # Non-fatal: requests will still work, just slower on first call
+        print(f"[STARTUP] Warning — model preload failed: {exc}")
+
+
+# ─── Security helper ──────────────────────────────────────────────────────────
 def verify_secret(request: Request):
     """Validate FACE_API_SECRET from Authorization header."""
+    auth_header = request.headers.get("Authorization")
+    client_ip   = request.headers.get("x-forwarded-for") or (
+        request.client.host if request.client else "unknown"
+    )
+
+    if not auth_header:
+        print(f"[SECURITY] Missing Authorization header — IP: {client_ip}  path: {request.url.path}")
+        raise HTTPException(status_code=401, detail="Unauthorized: Missing Authorization header")
+
     if not FACE_API_SECRET:
-        return  # No secret configured, skip check (dev mode)
-    auth = request.headers.get("Authorization", "")
-    token = auth.replace("Bearer ", "").strip()
+        return  # Dev mode: no secret configured → pass through
+
+    token = auth_header.replace("Bearer ", "").strip()
     if token != FACE_API_SECRET:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-MODEL_NAME = "ArcFace"        # 512-dim, best accuracy
-# Default to 'ssd' on Render (512MB RAM) to avoid OOM crashes, otherwise use 'retinaface'
-is_render = os.getenv("RENDER", "false").lower() == "true"
-default_detector = "ssd" if is_render else "retinaface"
-DETECTOR = os.getenv("DETECTOR_BACKEND", default_detector)
-DISTANCE_METRIC = "cosine"
+        print(f"[SECURITY] Invalid token — IP: {client_ip}  path: {request.url.path}")
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid token")
 
 
+# ─── Image helper ─────────────────────────────────────────────────────────────
 def image_from_bytes(file_bytes: bytes) -> np.ndarray:
     """Convert raw bytes → BGR numpy array."""
     arr = np.frombuffer(file_bytes, np.uint8)
@@ -83,7 +135,7 @@ def image_from_bytes(file_bytes: bytes) -> np.ndarray:
 
 
 def get_embedding(img: np.ndarray, detector: str = DETECTOR) -> list:
-    """Extract ArcFace embedding from image (returns largest face)."""
+    """Extract ArcFace embedding from image; returns embedding of the largest face."""
     try:
         results = DeepFace.represent(
             img_path=img,
@@ -100,22 +152,70 @@ def get_embedding(img: np.ndarray, detector: str = DETECTOR) -> list:
     if not results:
         raise HTTPException(status_code=400, detail="ตรวจไม่พบใบหน้าในรูปนี้")
 
-    # Return embedding of the largest face (highest w value)
     best = sorted(results, key=lambda x: x["facial_area"]["w"], reverse=True)[0]
-    return best["embedding"]  # list[float] of length 512
+    return best["embedding"]  # list[float] len=512
 
 
-# Global lock to serialize heavy face operations, preventing concurrent memory spikes on low-RAM hosts (like Render Free tier).
-face_lock = asyncio.Lock()
+# ═══════════════════════════════════════════════════════════════════════════════
+# Endpoints
+# ═══════════════════════════════════════════════════════════════════════════════
 
-
-# ─── Health check ────────────────────────────────────────────
+# ─── GET / — Root (alias for /health) ────────────────────────────────────────
 @app.get("/")
+async def root():
+    return {
+        "service": "ShotSync Face API",
+        "version": "3.0.0",
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
+# ─── GET /health — UptimeRobot + Admin Panel ─────────────────────────────────
+@app.get("/health")
 async def health():
-    return {"status": "ok", "model": MODEL_NAME, "detector": DETECTOR}
+    """
+    Lightweight health-check endpoint.
+    Used by:
+      • UptimeRobot (ping every 5 min to keep HF Space awake)
+      • Admin Panel health-check badge
+    Returns model readiness, detector, and service uptime.
+    """
+    uptime_seconds = int(time.time() - _startup_time)
+    return {
+        "status":   "ok",
+        "model":    MODEL_NAME,
+        "detector": DETECTOR,
+        "model_ready": _model_ready,
+        "uptime_seconds": uptime_seconds,
+        "platform": "hf_spaces" if is_hf else ("render" if is_render else "local"),
+    }
 
 
-# ─── Endpoint 1: Enroll ──────────────────────────────────────
+# ─── GET /warmup — Force model warm-up (optional) ────────────────────────────
+@app.get("/warmup")
+async def warmup():
+    """
+    Run DeepFace on a 1×1 dummy image to fully warm the model cache.
+    Call this once after deploy if you want near-zero latency on the first
+    real request. Does NOT require auth — safe to call publicly.
+    """
+    try:
+        dummy = np.zeros((100, 100, 3), dtype=np.uint8)
+        DeepFace.represent(
+            img_path=dummy,
+            model_name=MODEL_NAME,
+            detector_backend="opencv",
+            enforce_detection=False,
+            align=False,
+        )
+        return {"status": "warmed", "model": MODEL_NAME}
+    except Exception as exc:
+        # Non-fatal: warmup is best-effort
+        return {"status": "warmup_error", "detail": str(exc)}
+
+
+# ─── POST /enroll ─────────────────────────────────────────────────────────────
 @app.post("/enroll")
 async def enroll(
     request: Request,
@@ -123,18 +223,18 @@ async def enroll(
     image2: UploadFile = File(None),
     image3: UploadFile = File(None),
 ):
-    verify_secret(request)
     """
     Receive 1–3 face images, return mean ArcFace 512-dim embedding.
-    Used for user registration/re-enrollment.
+    Used for user registration / re-enrollment.
     """
+    verify_secret(request)
     async with face_lock:
         gc.collect()
         embeddings = []
 
-        # Use a lighter detector ('ssd') on Render to stay within 512MB RAM,
-        # but use 'retinaface' (which is the default DETECTOR locally) for high-accuracy local enrollment.
+        # On Render (512 MB) use 'ssd' to avoid OOM; elsewhere use configured DETECTOR
         detector_backend = "ssd" if is_render else DETECTOR
+
         for upload in [image1, image2, image3]:
             if upload is None:
                 continue
@@ -144,9 +244,8 @@ async def enroll(
                 emb = get_embedding(img, detector=detector_backend)
                 embeddings.append(emb)
             except HTTPException:
-                pass  # Skip images where no face detected
+                pass  # Skip images where no face was detected
 
-        # Clean up memory immediately after processing
         gc.collect()
 
         if not embeddings:
@@ -155,26 +254,24 @@ async def enroll(
                 detail="ตรวจไม่พบใบหน้าในรูปที่ส่งมาทั้งหมด กรุณาถ่ายใหม่ในที่แสงสว่าง",
             )
 
-        # Average embeddings from multiple angles for better accuracy
         mean_emb = np.mean(embeddings, axis=0).tolist()
-
         return {
-            "embedding": mean_emb,
-            "dim": len(mean_emb),
+            "embedding":     mean_emb,
+            "dim":           len(mean_emb),
             "faces_detected": len(embeddings),
-            "model": MODEL_NAME,
+            "model":         MODEL_NAME,
         }
 
 
-# ─── Endpoint 2: Extract ─────────────────────────────────────
+# ─── POST /extract ────────────────────────────────────────────────────────────
 @app.post("/extract")
 async def extract(request: Request, image: UploadFile = File(...)):
-    verify_secret(request)
     """
     Extract embeddings for ALL faces in one photo.
     Used by the pipeline to index event photos.
     Returns list of { embedding, bbox, confidence }.
     """
+    verify_secret(request)
     async with face_lock:
         gc.collect()
         raw = await image.read()
@@ -185,7 +282,7 @@ async def extract(request: Request, image: UploadFile = File(...)):
                 img_path=img,
                 model_name=MODEL_NAME,
                 detector_backend=DETECTOR,
-                enforce_detection=False,  # Don't throw if no faces found
+                enforce_detection=False,
                 align=True,
             )
         except Exception as e:
@@ -193,7 +290,6 @@ async def extract(request: Request, image: UploadFile = File(...)):
             gc.collect()
             return {"faces": [], "count": 0, "error": str(e)}
 
-        # Clean up memory immediately after processing
         gc.collect()
 
         if not results:
@@ -201,20 +297,19 @@ async def extract(request: Request, image: UploadFile = File(...)):
 
         faces = []
         for r in results:
-            # Filter out very low confidence detections
             conf = r.get("face_confidence", 0.0)
             if conf < 0.5 and conf != 0.0:
                 continue
             faces.append({
-                "embedding": r["embedding"],   # 512-dim list
-                "bbox": r["facial_area"],       # {x, y, w, h}
+                "embedding":  r["embedding"],   # 512-dim list
+                "bbox":       r["facial_area"], # {x, y, w, h}
                 "confidence": conf,
             })
 
         return {"faces": faces, "count": len(faces)}
 
 
-# ─── Endpoint 3: Compare (debug/test) ────────────────────────
+# ─── POST /compare ────────────────────────────────────────────────────────────
 @app.post("/compare")
 async def compare(
     request: Request,
@@ -245,14 +340,15 @@ async def compare(
 
         gc.collect()
         return {
-            "verified": result["verified"],
-            "distance": result["distance"],      # cosine distance (lower = more similar)
-            "threshold": result["threshold"],    # default ~0.40 for ArcFace cosine
-            "model": MODEL_NAME,
-            "metric": DISTANCE_METRIC,
+            "verified":  result["verified"],
+            "distance":  result["distance"],   # cosine distance (lower = more similar)
+            "threshold": result["threshold"],  # ~0.40 for ArcFace cosine
+            "model":     MODEL_NAME,
+            "metric":    DISTANCE_METRIC,
         }
 
 
+# ─── Dev entrypoint ───────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 7860)))

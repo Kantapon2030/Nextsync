@@ -43,6 +43,11 @@ GOOGLE_SERVICE_ACCOUNT_EMAIL="your-service-account-email@project.iam.gserviceacc
 GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC..."
 # Google Drive root parent folder where team folders will be auto-generated
 GOOGLE_DRIVE_FOLDER_ID="your-root-folder-id"
+
+# Python ArcFace Microservice (Render.com)
+FACE_API_URL="http://localhost:8000"
+FACE_API_SECRET="random-secret-for-inter-service-auth"
+ALLOWED_ORIGINS="http://localhost:3000,https://shotsync.vercel.app"
 ```
 
 ---
