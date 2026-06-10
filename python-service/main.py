@@ -91,6 +91,7 @@ async def startup_event():
     print(f"[STARTUP] Platform  : {'Hugging Face Spaces' if is_hf else ('Render' if is_render else 'Local')}")
     print(f"[STARTUP] CORS origins: {allowed_origins}")
     print(f"[STARTUP] Detector  : {DETECTOR}")
+    print(f"[STARTUP] Health    : /status (not /health — reserved by HF Spaces)")
     print(f"[STARTUP] Preloading ArcFace model...")
 
     try:
@@ -171,15 +172,16 @@ async def root():
     }
 
 
-# ─── GET /health — UptimeRobot + Admin Panel ─────────────────────────────────
-@app.get("/health")
-async def health():
+# ─── GET /status — UptimeRobot + Admin Panel ─────────────────────────────────
+# NOTE: /health is intercepted by HF Spaces infrastructure — use /status instead
+@app.get("/status")
+async def status():
     """
     Lightweight health-check endpoint.
     Used by:
       • UptimeRobot (ping every 5 min to keep HF Space awake)
       • Admin Panel health-check badge
-    Returns model readiness, detector, and service uptime.
+    NOTE: named /status because HF Spaces intercepts /health at proxy level.
     """
     uptime_seconds = int(time.time() - _startup_time)
     return {
