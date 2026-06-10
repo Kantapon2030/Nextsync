@@ -2,13 +2,16 @@
 // Client library for the ArcFace Python microservice (DeepFace / FastAPI)
 // All face operations (enroll + extract) go through this service for consistent 512-dim embeddings.
 
-const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
-const fallbackUrl = isProduction ? "https://nextsync-face-api.onrender.com" : "http://localhost:8000";
-let FACE_API_URL = process.env.FACE_API_URL ?? fallbackUrl;
+const HF_SPACE_URL = "https://kantapon020-shotsync-face-api.hf.space";
+const LOCAL_URL    = "http://localhost:8000";
 
-// Force production Render URL if running on Vercel and pointing to localhost/127.0.0.1
+// Priority: env var → HF Space (prod) → localhost (dev)
+const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
+let FACE_API_URL = process.env.FACE_API_URL ?? (isProduction ? HF_SPACE_URL : LOCAL_URL);
+
+// Safety net: never let Vercel call localhost — redirect to HF Space
 if (process.env.VERCEL === "1" && (FACE_API_URL.includes("localhost") || FACE_API_URL.includes("127.0.0.1"))) {
-  FACE_API_URL = "https://nextsync-face-api.onrender.com";
+  FACE_API_URL = HF_SPACE_URL;
 }
 
 const FACE_API_SECRET = process.env.FACE_API_SECRET ?? "";
