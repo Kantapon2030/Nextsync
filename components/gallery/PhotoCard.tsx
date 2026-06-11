@@ -1,7 +1,7 @@
 // components/gallery/PhotoCard.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, memo } from "react";
 import { Download, Eye } from "lucide-react";
 
 export interface PhotoData {
@@ -28,7 +28,7 @@ interface PhotoCardProps {
   onView: (photo: PhotoData) => void;
 }
 
-export function PhotoCard({ photo, onView }: PhotoCardProps) {
+export const PhotoCard = memo(function PhotoCard({ photo, onView }: PhotoCardProps) {
   // Progressive loading: show small thumbnail first, then upgrade to 800px
   const lowSrc = photo.thumbnailSm || photo.thumbnailUrl || photo.driveUrl;
   const highSrc = photo.thumbnailUrl || photo.driveUrl;
@@ -50,6 +50,12 @@ export function PhotoCard({ photo, onView }: PhotoCardProps) {
     setSrc("https://images.unsplash.com/photo-1452626038306-9aae5e071dd3?auto=format&fit=crop&w=400&q=80");
   };
 
+  // Compute aspect ratio for skeleton placeholder to prevent layout shift
+  const hasKnownDimensions = photo.width && photo.height && photo.width > 0 && photo.height > 0;
+  const aspectRatio = hasKnownDimensions
+    ? `${photo.width} / ${photo.height}`
+    : "4 / 3"; // safe default
+
   return (
     <div
       onClick={() => onView(photo)}
@@ -57,9 +63,24 @@ export function PhotoCard({ photo, onView }: PhotoCardProps) {
     >
       {/* Image container - auto height for masonry */}
       <div className="relative w-full bg-black/40 overflow-hidden">
-        {/* Shimmer placeholder */}
+        {/* Skeleton shimmer placeholder — reserves space using the photo's real aspect ratio */}
         {!loaded && (
-          <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-[var(--surface)] via-[var(--surface-hover)] to-[var(--surface)] z-10" />
+          <div
+            className="w-full z-10 relative"
+            style={{ aspectRatio }}
+          >
+            {/* Animated shimmer overlay */}
+            <div className="absolute inset-0 bg-gradient-to-br from-[var(--surface)] via-[var(--surface-hover)] to-[var(--surface)]">
+              <div
+                className="absolute inset-0"
+                style={{
+                  background:
+                    "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.04) 40%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 60%, transparent 100%)",
+                  animation: "shimmer 1.8s ease-in-out infinite",
+                }}
+              />
+            </div>
+          </div>
         )}
 
         <img
@@ -68,7 +89,7 @@ export function PhotoCard({ photo, onView }: PhotoCardProps) {
           loading="lazy"
           decoding="async"
           className={`w-full h-auto object-cover transition-all duration-700 group-hover:scale-[1.04] ${
-            loaded ? "opacity-100 blur-0" : "opacity-0 blur-sm"
+            loaded ? "opacity-100 blur-0" : "opacity-0 blur-sm absolute inset-0"
           }`}
           onLoad={handleLoad}
           onError={handleError}
@@ -105,6 +126,6 @@ export function PhotoCard({ photo, onView }: PhotoCardProps) {
       </div>
     </div>
   );
-}
+});
 
 export default PhotoCard;

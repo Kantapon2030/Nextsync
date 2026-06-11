@@ -1,132 +1,45 @@
 // app/gallery/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
+import { usePhotos } from "@/hooks/usePhotos";
 import { FaceSearchBar } from "@/components/gallery/FaceSearchBar";
 import { FilterBar, FilterValues } from "@/components/gallery/FilterBar";
 import { PhotoGrid } from "@/components/gallery/PhotoGrid";
 import { SeasonBanner } from "@/components/gallery/SeasonBanner";
-import { EventSelector, Event } from "@/components/gallery/EventSelector";
+import { EventSelector } from "@/components/gallery/EventSelector";
 import { SeasonSelector } from "@/components/gallery/SeasonSelector";
 import { RefreshCw, XCircle, Sparkles } from "lucide-react";
 import Link from "next/link";
 
 export default function GalleryPage() {
   const { data: session } = useSession();
-  const [photos, setPhotos] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  // Face search states
-  const [faceSearchResults, setFaceSearchResults] = useState<any[] | null>(null);
-  const [faceSearchLoading, setFaceSearchLoading] = useState(false);
-
-  // Season and event states
-  const [selectedSeason, setSelectedSeason] = useState<any>(null);
-  const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
-  const [selectedTimeslot, setSelectedTimeslot] = useState<string | null>(null);
-  const [eventsList, setEventsList] = useState<Event[]>([]);
-  const [seasonLoading, setSeasonLoading] = useState(true);
-
-  // Filter states
-  const [filters, setFilters] = useState<FilterValues>({
-    sortBy: "newest",
-    status: "approved",
-  });
-
-  // Load Season & Events
-  useEffect(() => {
-    const loadEvents = async () => {
-      try {
-        const url = selectedSeason?.id 
-          ? `/api/events?seasonId=${selectedSeason.id}` 
-          : "/api/events";
-        const res = await fetch(url);
-        const data = await res.json();
-        if (data.success) {
-          setSelectedSeason(data.season);
-          setEventsList(data.events || []);
-          // Reset event selection if switching seasons
-          if (selectedSeason?.id && selectedEvent) {
-            setSelectedEvent(null);
-          }
-        }
-      } catch (err) {
-        console.error("Error loading events:", err);
-      } finally {
-        setSeasonLoading(false);
-      }
-    };
-    loadEvents();
-  }, [selectedSeason?.id]);
-
-  const fetchPhotos = async (pageNum: number, currentFilters: FilterValues, isAppend = false) => {
-    if (faceSearchResults !== null) return;
-
-    setLoading(true);
-    setError(null);
-    try {
-      const queryParams: any = {
-        page: pageNum.toString(),
-        limit: "48",
-        status: currentFilters.status || "approved",
-      };
-
-      if (selectedEvent) {
-        queryParams.eventId = selectedEvent;
-      } else if (selectedSeason?.id) {
-        queryParams.seasonId = selectedSeason.id;
-      }
-
-      if (selectedTimeslot) {
-        queryParams.timeslot = selectedTimeslot;
-      }
-
-      const query = new URLSearchParams(queryParams);
-
-      const res = await fetch(`/api/photos?${query.toString()}`);
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
-      }
-      const data = await res.json();
-
-      if (data.success) {
-        let list = data.photos;
-        if (currentFilters.sortBy === "oldest") {
-          list = [...list].reverse();
-        }
-
-        setPhotos((prev) => (isAppend ? [...prev, ...list] : list));
-        setHasMore(data.page < data.totalPages);
-      } else {
-        throw new Error(data.error || "Failed to fetch photos");
-      }
-    } catch (err: any) {
-      console.error("Error fetching photos:", err);
-      setError("ไม่สามารถดึงข้อมูลรูปภาพได้ กรุณาลองใหม่อีกครั้ง");
-      setHasMore(false);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Reload photos when filters or season/event/timeslot selection changes
-  useEffect(() => {
-    if (!seasonLoading) {
-      setPage(1);
-      fetchPhotos(1, filters, false);
-    }
-  }, [filters, faceSearchResults, selectedEvent, selectedTimeslot, selectedSeason, seasonLoading]);
-
-  const handleLoadMore = () => {
-    if (loading || !hasMore || faceSearchResults !== null) return;
-    const nextPage = page + 1;
-    setPage(nextPage);
-    fetchPhotos(nextPage, filters, true);
-  };
+  const {
+    photos,
+    setPhotos,
+    loading,
+    error,
+    hasMore,
+    page,
+    selectedSeason,
+    setSelectedSeason,
+    selectedEvent,
+    setSelectedEvent,
+    selectedTimeslot,
+    setSelectedTimeslot,
+    eventsList,
+    seasonLoading,
+    setSeasonLoading,
+    filters,
+    setFilters,
+    faceSearchResults,
+    setFaceSearchResults,
+    faceSearchLoading,
+    setFaceSearchLoading,
+    handleLoadMore,
+    fetchPhotos,
+  } = usePhotos();
 
   const handleFilterChange = (newFilters: FilterValues) => {
     setFilters(newFilters);
@@ -232,7 +145,6 @@ export default function GalleryPage() {
               </p>
               <button
                 onClick={() => {
-                  setPage(1);
                   fetchPhotos(1, filters, false);
                 }}
                 className="mt-4 px-4 py-2 text-xs font-bold text-white bg-gradient-to-r from-[var(--accent-blue)] to-[var(--accent-purple)] rounded-xl transition-all hover:brightness-110"

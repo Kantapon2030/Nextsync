@@ -1,92 +1,34 @@
 // app/my-photos/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useSession } from "next-auth/react";
+import { usePhotos } from "@/hooks/usePhotos";
 import { PhotoGrid } from "@/components/gallery/PhotoGrid";
-import { EventSelector, Event } from "@/components/gallery/EventSelector";
+import { EventSelector } from "@/components/gallery/EventSelector";
 import { Sparkles, RefreshCw, Lock, Camera, Download } from "lucide-react";
 import { FaceScanModal } from "@/components/gallery/FaceScanModal";
 
 export default function MyPhotosPage() {
   const { data: session, status } = useSession();
-  const [photos, setPhotos] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
-  // Season & Event filtering states
-  const [selectedSeason, setSelectedSeason] = useState<any>(null);
-  const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
-  const [selectedTimeslot, setSelectedTimeslot] = useState<string | null>(null);
-  const [eventsList, setEventsList] = useState<Event[]>([]);
-  const [seasonLoading, setSeasonLoading] = useState(true);
-
-  // Load Season & Events
-  useEffect(() => {
-    const loadEvents = async () => {
-      try {
-        const res = await fetch("/api/events");
-        const data = await res.json();
-        if (data.success) {
-          setSelectedSeason(data.season);
-          setEventsList(data.events || []);
-        }
-      } catch (err) {
-        console.error("Error loading events:", err);
-      } finally {
-        setSeasonLoading(false);
-      }
-    };
-    loadEvents();
-  }, []);
-
-  const fetchMyPhotos = async () => {
-    if (!session?.user?.faceEnrolled) {
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    try {
-      const searchBody: any = { limit: 100 };
-
-      if (selectedEvent) {
-        searchBody.eventId = selectedEvent;
-      } else if (selectedSeason?.id) {
-        searchBody.seasonId = selectedSeason.id;
-      }
-
-      if (selectedTimeslot) {
-        searchBody.timeslot = selectedTimeslot;
-      }
-
-      const res = await fetch("/api/face/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(searchBody),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setPhotos(data.photos || []);
-      } else {
-        setError(data.error || "เกิดข้อผิดพลาดในการโหลดรูปภาพของท่าน");
-      }
-    } catch (err) {
-      console.error(err);
-      setError("ไม่สามารถเชื่อมต่อระบบค้นหาใบหน้าได้ในขณะนี้");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (status === "authenticated" && !seasonLoading) {
-      fetchMyPhotos();
-    }
-  }, [session, status, selectedEvent, selectedTimeslot, selectedSeason, seasonLoading]);
+  const {
+    photos,
+    loading,
+    error,
+    selectedEvent,
+    setSelectedEvent,
+    selectedTimeslot,
+    setSelectedTimeslot,
+    eventsList,
+    seasonLoading,
+    fetchMyPhotos,
+  } = usePhotos({
+    faceSearchMode: true,
+    user: session?.user as { faceEnrolled?: boolean } | null,
+  });
 
   const handleDownloadAll = async () => {
     if (photos.length === 0 || downloading) return;

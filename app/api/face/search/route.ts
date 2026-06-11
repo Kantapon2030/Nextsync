@@ -3,7 +3,7 @@
 // via pgvector cosine distance (<=>).
 import { auth } from "@/lib/auth";
 import { db, userFaceEmbeddings, filterConfig } from "@/lib/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, SQL } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -70,20 +70,20 @@ export async function POST(req: Request) {
       .limit(1);
     const threshold = config[0]?.faceSimilarityDist ?? DEFAULT_THRESHOLD;
 
-    // Build optional filter conditions
-    const conditions: string[] = [`p.status = 'approved'`];
+    // Build optional filter conditions using parameterized sql fragments (no raw strings)
+    const conditions: SQL[] = [sql`p.status = 'approved'`];
 
     if (eventId && eventId !== "all" && eventId !== "null") {
-      conditions.push(`p.event_id = '${eventId.replace(/'/g, "''")}'`);
+      conditions.push(sql`p.event_id = ${eventId}`);
     } else if (seasonId && seasonId !== "all" && seasonId !== "null") {
-      conditions.push(`p.season_id = '${seasonId.replace(/'/g, "''")}'`);
+      conditions.push(sql`p.season_id = ${seasonId}`);
     }
 
     if (timeslot && timeslot !== "all" && timeslot !== "null") {
-      conditions.push(`p.timeslot = '${timeslot.replace(/'/g, "''")}'`);
+      conditions.push(sql`p.timeslot = ${timeslot}`);
     }
 
-    const whereClause = conditions.join(" AND ");
+    const whereClause = sql.join(conditions, sql` AND `);
 
     // pgvector cosine distance search (<=> operator)
     // Lower distance = more similar face
@@ -108,7 +108,7 @@ export async function POST(req: Request) {
       FROM photo_face_embeddings pfe
       JOIN photos p ON p.id = pfe.photo_id
       WHERE
-        ${sql.raw(whereClause)}
+        ${whereClause}
         AND (pfe.embedding <=> ${queryVectorStr}::vector) < ${threshold}
       ORDER BY p.id, (pfe.embedding <=> ${queryVectorStr}::vector) ASC
       LIMIT ${limit}

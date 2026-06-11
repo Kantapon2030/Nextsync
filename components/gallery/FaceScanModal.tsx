@@ -2,12 +2,18 @@
 // Face scan modal for gallery — upgraded with SOTA client-side auto-capture:
 //   "search": captures 1 face image automatically when centered
 //   "enroll": captures 3 face angles (มองตรง, หันซ้าย, หันขวา) automatically with screen flash & rainbow guides
+// Features:
+//   ✅ Canvas AR overlay with bounding box + 68 landmark points
+//   ✅ Tab switch: Camera / Upload Photo
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useSession } from "next-auth/react";
-import { Camera, RefreshCw, CheckCircle2, AlertCircle, X, Sparkles, UserCheck, Info } from "lucide-react";
+import {
+  Camera, RefreshCw, CheckCircle2, AlertCircle, X, Sparkles,
+  UserCheck, Upload, ImagePlus, Trash2,
+} from "lucide-react";
 import { loadModels } from "@/lib/face";
 import * as faceapi from "face-api.js";
 
@@ -19,6 +25,30 @@ const ANGLE_HINT: Record<Angle, string> = {
   ขวา: "หันหน้าเล็กน้อยไปทางขวา 👈",
 };
 const REQUIRED_STABLE_FRAMES = 8;
+
+// Landmark drawing color groups (68 points)
+const LANDMARK_COLORS: Record<string, string> = {
+  jaw: "#06b6d4",      // cyan
+  leftBrow: "#a855f7",  // purple
+  rightBrow: "#a855f7", // purple
+  nose: "#f59e0b",      // yellow
+  leftEye: "#22c55e",   // green
+  rightEye: "#22c55e",  // green
+  mouth: "#ec4899",     // pink
+};
+
+// Index ranges for each landmark group (0-based, face-api.js 68-point model)
+const LANDMARK_GROUPS: { name: string; start: number; end: number }[] = [
+  { name: "jaw", start: 0, end: 16 },
+  { name: "leftBrow", start: 17, end: 21 },
+  { name: "rightBrow", start: 22, end: 26 },
+  { name: "nose", start: 27, end: 35 },
+  { name: "leftEye", start: 36, end: 41 },
+  { name: "rightEye", start: 42, end: 47 },
+  { name: "mouth", start: 48, end: 67 },
+];
+
+type TabMode = "camera" | "upload";
 
 interface FaceScanModalProps {
   isOpen: boolean;
@@ -43,6 +73,7 @@ export function FaceScanModal({
 }: FaceScanModalProps) {
   const { data: session, update } = useSession();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const loopRef = useRef<number | null>(null);
   const currentStepRef = useRef(0);
@@ -56,6 +87,9 @@ export function FaceScanModal({
   }, []);
   const [camError, setCamError] = useState<string | null>(null);
   const [modelsLoaded, setModelsLoaded] = useState(false);
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState<TabMode>("camera");
 
   // Auto-capture states
   const [faceDetected, setFaceDetected] = useState(false);
@@ -75,6 +109,16 @@ export function FaceScanModal({
 
   const [processing, setProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Upload tab states
+  const [uploadPreview, setUploadPreview] = useState<string | null>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadFaceDetected, setUploadFaceDetected] = useState(false);
+  const [uploadDetecting, setUploadDetecting] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const uploadImgRef = useRef<HTMLImageElement>(null);
+  const uploadCanvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Sync step ref for animation frame closure
   useEffect(() => {
@@ -111,6 +155,11 @@ export function FaceScanModal({
     setFaceAngle("unknown");
     setFlashActive(false);
     setStableCount(0);
+    setActiveTab("camera");
+    setUploadPreview(null);
+    setUploadFile(null);
+    setUploadFaceDetected(false);
+    setUploadDetecting(false);
 
     navigator.mediaDevices
       .getUserMedia({ video: { facingMode: "user", width: { ideal: 640 } }, audio: false })
@@ -137,6 +186,23 @@ export function FaceScanModal({
     };
   }, [isOpen]);
 
+  // Pause/resume camera when switching tabs
+  useEffect(() => {
+    if (!streamRef.current) return;
+    const tracks = streamRef.current.getVideoTracks();
+    if (activeTab === "upload") {
+      tracks.forEach((t) => (t.enabled = false));
+      // Clear the AR canvas when switching away
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    } else {
+      tracks.forEach((t) => (t.enabled = true));
+    }
+  }, [activeTab]);
+
   const handleClose = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     if (loopRef.current) {
@@ -144,6 +210,147 @@ export function FaceScanModal({
     }
     onClose();
   };
+
+  // ── Canvas AR drawing helpers ─────────────────────────────────────
+
+  /**
+   * Draws a rounded rectangle on a 2D canvas context.
+   */
+  const drawRoundedRect = (
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number, w: number, h: number, r: number,
+    strokeStyle: string, lineWidth: number, dashed = false
+  ) => {
+    ctx.beginPath();
+    ctx.lineWidth = lineWidth;
+    ctx.strokeStyle = strokeStyle;
+    if (dashed) {
+      ctx.setLineDash([6, 4]);
+    } else {
+      ctx.setLineDash([]);
+    }
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+
+  /**
+   * Draws 68 landmark points on the canvas, color-coded by group.
+   */
+  const drawLandmarks = (
+    ctx: CanvasRenderingContext2D,
+    landmarks: faceapi.FaceLandmarks68,
+    scaleX: number,
+    scaleY: number,
+    mirror: boolean,
+    canvasW: number,
+  ) => {
+    const positions = landmarks.positions;
+    for (const group of LANDMARK_GROUPS) {
+      ctx.fillStyle = LANDMARK_COLORS[group.name] || "#ffffff";
+      for (let i = group.start; i <= group.end; i++) {
+        const pt = positions[i];
+        const px = mirror ? canvasW - pt.x * scaleX : pt.x * scaleX;
+        const py = pt.y * scaleY;
+        ctx.beginPath();
+        ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  };
+
+  /**
+   * Draws the full AR overlay: bounding box, landmarks, confidence label.
+   */
+  const drawAROverlay = useCallback(
+    (
+      detection: faceapi.WithFaceLandmarks<{ detection: faceapi.FaceDetection }>,
+      isCentered: boolean,
+      isCorrectAngle: boolean,
+    ) => {
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      if (!canvas || !video) return;
+
+      const displayW = canvas.width;
+      const displayH = canvas.height;
+      const videoW = video.videoWidth || 640;
+      const videoH = video.videoHeight || 480;
+
+      const scaleX = displayW / videoW;
+      const scaleY = displayH / videoH;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      ctx.clearRect(0, 0, displayW, displayH);
+
+      const box = detection.detection.box;
+      // Mirror the X coordinate because video is mirrored via scaleX(-1)
+      const bx = displayW - (box.x + box.width) * scaleX;
+      const by = box.y * scaleY;
+      const bw = box.width * scaleX;
+      const bh = box.height * scaleY;
+
+      // Choose bounding box color & style based on state
+      let boxColor = "rgba(255, 255, 255, 0.6)";
+      let dashed = true;
+      if (isCentered && isCorrectAngle) {
+        boxColor = "#22c55e"; // green
+        dashed = false;
+      } else if (isCentered) {
+        boxColor = "#f59e0b"; // yellow
+        dashed = false;
+      } else if (detection.detection.score > 0.5) {
+        boxColor = "rgba(255, 255, 255, 0.5)";
+        dashed = true;
+      }
+
+      // Draw glow behind box
+      ctx.shadowColor = boxColor;
+      ctx.shadowBlur = 12;
+      drawRoundedRect(ctx, bx, by, bw, bh, 8, boxColor, 2.5, dashed);
+      ctx.shadowBlur = 0;
+
+      // Draw landmarks
+      drawLandmarks(ctx, detection.landmarks, scaleX, scaleY, true, displayW);
+
+      // Confidence label
+      const confidence = Math.round(detection.detection.score * 100);
+      ctx.font = "bold 11px 'Outfit', sans-serif";
+      const labelText = `${confidence}%`;
+      const labelW = ctx.measureText(labelText).width + 12;
+      const labelX = bx + bw / 2 - labelW / 2;
+      const labelY = by - 8;
+
+      ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+      ctx.beginPath();
+      ctx.roundRect(labelX, labelY - 16, labelW, 20, 6);
+      ctx.fill();
+
+      ctx.fillStyle = boxColor;
+      ctx.textAlign = "center";
+      ctx.fillText(labelText, bx + bw / 2, labelY - 1);
+      ctx.textAlign = "start";
+    },
+    []
+  );
+
+  const clearARCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx?.clearRect(0, 0, canvas.width, canvas.height);
+  }, []);
 
   // Capture one frame from camera
   const captureFrame = useCallback((): Promise<File | null> => {
@@ -233,7 +440,7 @@ export function FaceScanModal({
 
   // Real-time Face Tracking Loop using client-side face-api.js (throttled to 150ms to prevent lag)
   useEffect(() => {
-    if (!isOpen || !camReady || !modelsLoaded || !videoRef.current) return;
+    if (!isOpen || !camReady || !modelsLoaded || !videoRef.current || activeTab !== "camera") return;
 
     let active = true;
     let stableFrames = 0;
@@ -264,7 +471,7 @@ export function FaceScanModal({
             const videoWidth = video.videoWidth || 640;
             const videoHeight = video.videoHeight || 480;
 
-            // Check if face is centered in the oval guide
+            // Check if face is centered in the guide
             const faceCenterX = box.x + box.width / 2;
             const faceCenterY = box.y + box.height / 2;
 
@@ -294,6 +501,11 @@ export function FaceScanModal({
               angle = "ซ้าย"; // head turned left
             }
             setFaceAngle(angle);
+
+            // Draw AR overlay on canvas
+            const currentAngle = ANGLES[Math.min(currentStepRef.current, ANGLES.length - 1)];
+            const isCorrectAngle = mode === "enroll" ? angle === currentAngle : true;
+            drawAROverlay(detection, isCentered, isCorrectAngle);
 
             // Auto-trigger logic
             if (isCentered) {
@@ -333,6 +545,7 @@ export function FaceScanModal({
             setFaceAngle("unknown");
             stableFrames = 0;
             setStableCount(0);
+            clearARCanvas();
           }
         }
 
@@ -353,20 +566,39 @@ export function FaceScanModal({
         cancelAnimationFrame(loopRef.current);
       }
     };
-  }, [isOpen, camReady, modelsLoaded, mode, triggerAutoCapture]);
+  }, [isOpen, camReady, modelsLoaded, mode, triggerAutoCapture, activeTab, drawAROverlay, clearARCanvas]);
+
+  // Sync canvas size with video display size
+  useEffect(() => {
+    if (!camReady || !videoRef.current || !canvasRef.current) return;
+    const video = videoRef.current;
+
+    const syncSize = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      canvas.width = video.clientWidth;
+      canvas.height = video.clientHeight;
+    };
+
+    syncSize();
+    const resizeObserver = new ResizeObserver(syncSize);
+    resizeObserver.observe(video);
+    return () => resizeObserver.disconnect();
+  }, [camReady]);
 
   const handleEnrollSubmit = () => {
     handleEnrollSubmitWithFiles(captures);
   };
 
   const handleSearch = async (enrollToo = false) => {
+    const fileToUse = activeTab === "upload" ? uploadFile : captureFile;
     setProcessing(true);
     setErrorMsg(null);
 
     try {
-      if (enrollToo && captureFile) {
+      if (enrollToo && fileToUse) {
         const enrollForm = new FormData();
-        enrollForm.append("image1", captureFile);
+        enrollForm.append("image1", fileToUse);
         const enrollRes = await fetch("/api/face/enroll", { method: "POST", body: enrollForm });
         if (enrollRes.ok) await update({ faceEnrolled: true });
       }
@@ -394,11 +626,166 @@ export function FaceScanModal({
     }
   };
 
+  // ── Upload tab handlers ─────────────────────────────────────────
+
+  const processUploadedImage = useCallback(async (file: File) => {
+    setUploadDetecting(true);
+    setUploadFaceDetected(false);
+    setErrorMsg(null);
+
+    const previewUrl = URL.createObjectURL(file);
+    setUploadPreview(previewUrl);
+    setUploadFile(file);
+
+    // Wait for models
+    try {
+      await loadModels();
+    } catch {
+      setErrorMsg("ไม่สามารถโหลดโมเดลตรวจจับใบหน้าได้");
+      setUploadDetecting(false);
+      return;
+    }
+
+    // Create an image element and detect face
+    const img = new window.Image();
+    img.onload = async () => {
+      try {
+        const detection = await faceapi
+          .detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.45 }))
+          .withFaceLandmarks();
+
+        if (detection) {
+          setUploadFaceDetected(true);
+
+          // Draw AR overlay on upload canvas
+          const canvas = uploadCanvasRef.current;
+          if (canvas) {
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+              const box = detection.detection.box;
+              // No mirroring needed for uploaded images
+              drawRoundedRect(
+                ctx, box.x, box.y, box.width, box.height,
+                8, "#22c55e", 3, false
+              );
+
+              // Draw landmarks (no mirror)
+              const positions = detection.landmarks.positions;
+              for (const group of LANDMARK_GROUPS) {
+                ctx.fillStyle = LANDMARK_COLORS[group.name] || "#ffffff";
+                for (let i = group.start; i <= group.end; i++) {
+                  const pt = positions[i];
+                  ctx.beginPath();
+                  ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+                  ctx.fill();
+                }
+              }
+
+              // Confidence label
+              const confidence = Math.round(detection.detection.score * 100);
+              ctx.font = "bold 16px 'Outfit', sans-serif";
+              const labelText = `ตรวจพบใบหน้า ${confidence}%`;
+              const labelW = ctx.measureText(labelText).width + 16;
+              const labelX = box.x + box.width / 2 - labelW / 2;
+              const labelY = box.y - 10;
+
+              ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+              ctx.beginPath();
+              ctx.roundRect(labelX, labelY - 22, labelW, 28, 8);
+              ctx.fill();
+
+              ctx.fillStyle = "#22c55e";
+              ctx.textAlign = "center";
+              ctx.fillText(labelText, box.x + box.width / 2, labelY);
+              ctx.textAlign = "start";
+            }
+          }
+
+          // For search mode, set the file as capture file
+          if (mode === "search") {
+            setCaptureFile(file);
+          }
+          // For enroll mode, also set as first capture
+          if (mode === "enroll") {
+            setCaptures([file]);
+            setPreviews([previewUrl]);
+          }
+        } else {
+          setUploadFaceDetected(false);
+          setErrorMsg("ไม่พบใบหน้าในรูปภาพ กรุณาเลือกรูปที่เห็นใบหน้าชัดเจน");
+        }
+      } catch (err: any) {
+        console.error("Upload face detection error:", err);
+        setErrorMsg("เกิดข้อผิดพลาดในการตรวจจับใบหน้า");
+      } finally {
+        setUploadDetecting(false);
+      }
+    };
+    img.onerror = () => {
+      setErrorMsg("ไม่สามารถอ่านไฟล์รูปภาพได้ กรุณาลองไฟล์อื่น");
+      setUploadDetecting(false);
+    };
+    img.src = previewUrl;
+  }, [mode, drawAROverlay]);
+
+  const handleFileDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      const file = e.dataTransfer.files[0];
+      if (file && (file.type === "image/jpeg" || file.type === "image/png")) {
+        processUploadedImage(file);
+      } else {
+        setErrorMsg("รองรับเฉพาะไฟล์ JPG หรือ PNG เท่านั้น");
+      }
+    },
+    [processUploadedImage]
+  );
+
+  const handleFileSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) {
+        processUploadedImage(file);
+      }
+    },
+    [processUploadedImage]
+  );
+
+  const clearUpload = useCallback(() => {
+    setUploadPreview(null);
+    setUploadFile(null);
+    setUploadFaceDetected(false);
+    setUploadDetecting(false);
+    setErrorMsg(null);
+    setCaptureFile(null);
+    setCaptures([]);
+    setPreviews([]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
+
+  const handleUploadSubmit = () => {
+    if (mode === "enroll") {
+      if (captures.length > 0) {
+        handleEnrollSubmitWithFiles(captures);
+      }
+    } else {
+      handleSearch(false);
+    }
+  };
+
   if (!isOpen) return null;
   if (!mounted) return null;
 
   const currentAngle = ANGLES[Math.min(step, ANGLES.length - 1)];
   const enrollDone = step >= ANGLES.length;
+  const isOnUploadTab = activeTab === "upload";
+  const hasUploadResult = isOnUploadTab && uploadPreview && !uploadDetecting;
+  const canSubmitUpload = isOnUploadTab && uploadFaceDetected && !processing;
 
   const getBottomGuideState = () => {
     if (!modelsLoaded) {
@@ -433,7 +820,7 @@ export function FaceScanModal({
         emoji: "📐",
         animateClass: "animate-bounce",
         label: "ตำแหน่งไม่ตรงกรอบ",
-        text: "ขยับใบหน้าเข้ามาประชิดกรอบสีเขียวด้านใน 📐",
+        text: "ขยับใบหน้าเข้ามาประชิดกรอบด้านใน 📐",
         color: "#f59e0b"
       };
     }
@@ -544,6 +931,15 @@ export function FaceScanModal({
           border-color: #22c55e !important;
           box-shadow: 0 0 8px #22c55e;
         }
+
+        @keyframes drag-pulse {
+          0%, 100% { border-color: rgba(79, 172, 254, 0.4); }
+          50% { border-color: rgba(79, 172, 254, 0.9); }
+        }
+        .drag-active {
+          animation: drag-pulse 1s ease-in-out infinite;
+          background: rgba(79, 172, 254, 0.05) !important;
+        }
       `}</style>
 
       <div className="glass border border-[var(--border)] bg-[#0d0f1e]/95 max-w-lg w-full overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-250 select-none shadow-2xl">
@@ -564,10 +960,36 @@ export function FaceScanModal({
           </button>
         </div>
 
+        {/* Tab Toggle */}
+        <div className="flex border-b border-[var(--border)]">
+          <button
+            onClick={() => setActiveTab("camera")}
+            className={`flex-1 py-2.5 text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+              activeTab === "camera"
+                ? "text-[var(--accent-blue)] border-b-2 border-[var(--accent-blue)] bg-[var(--accent-blue)]/5"
+                : "text-[var(--text3)] hover:text-[var(--text2)] hover:bg-white/[0.02]"
+            }`}
+          >
+            <Camera className="h-3.5 w-3.5" />
+            <span>กล้อง</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("upload")}
+            className={`flex-1 py-2.5 text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+              activeTab === "upload"
+                ? "text-[var(--accent-purple)] border-b-2 border-[var(--accent-purple)] bg-[var(--accent-purple)]/5"
+                : "text-[var(--text3)] hover:text-[var(--text2)] hover:bg-white/[0.02]"
+            }`}
+          >
+            <Upload className="h-3.5 w-3.5" />
+            <span>อัปโหลดรูป</span>
+          </button>
+        </div>
+
         <div className="p-6 flex-1 flex flex-col gap-4">
           
-          {/* Angle indicators */}
-          {mode === "enroll" && (
+          {/* Angle indicators (camera tab, enroll mode only) */}
+          {mode === "enroll" && activeTab === "camera" && (
             <div className="flex justify-center gap-4">
               {ANGLES.map((a, i) => (
                 <div key={a} className="flex flex-col items-center gap-1.5">
@@ -594,164 +1016,269 @@ export function FaceScanModal({
             </div>
           )}
 
-          {/* Camera Frame */}
-          <div className={`relative aspect-[4/3] w-full rounded-2xl overflow-hidden bg-black/60 shadow-inner flex items-center justify-center transition-all duration-300 ${
-            mode === "enroll" && faceCentered && faceAngle === currentAngle
-              ? "ring-4 ring-green-500 shadow-[0_0_25px_rgba(34,197,94,0.6)] border-transparent aligned-state"
-              : faceDetected && !capturePreview
-              ? "rainbow-border border-transparent"
-              : "border border-[var(--border)]"
-          }`}>
-            
-            {/* Corner Brackets */}
-            {camReady && !capturePreview && (
-              <>
-                <div className="corner-bracket corner-top-left" />
-                <div className="corner-bracket corner-top-right" />
-                <div className="corner-bracket corner-bottom-left" />
-                <div className="corner-bracket corner-bottom-right" />
-              </>
-            )}
+          {/* ═══ CAMERA TAB ═══ */}
+          {activeTab === "camera" && (
+            <>
+              {/* Camera Frame */}
+              <div className={`relative aspect-[4/3] w-full rounded-2xl overflow-hidden bg-black/60 shadow-inner flex items-center justify-center transition-all duration-300 ${
+                mode === "enroll" && faceCentered && faceAngle === currentAngle
+                  ? "ring-4 ring-green-500 shadow-[0_0_25px_rgba(34,197,94,0.6)] border-transparent aligned-state"
+                  : faceDetected && !capturePreview
+                  ? "rainbow-border border-transparent"
+                  : "border border-[var(--border)]"
+              }`}>
+                
+                {/* Corner Brackets */}
+                {camReady && !capturePreview && (
+                  <>
+                    <div className="corner-bracket corner-top-left" />
+                    <div className="corner-bracket corner-top-right" />
+                    <div className="corner-bracket corner-bottom-left" />
+                    <div className="corner-bracket corner-bottom-right" />
+                  </>
+                )}
 
-            {/* Camera screen flash overlay */}
-            {flashActive && (
-              <div className="absolute inset-0 bg-white z-50 pointer-events-none transition-opacity duration-75 opacity-100" />
-            )}
+                {/* Camera screen flash overlay */}
+                {flashActive && (
+                  <div className="absolute inset-0 bg-white z-50 pointer-events-none transition-opacity duration-75 opacity-100" />
+                )}
 
-            {/* Camera not ready */}
-            {(!camReady || !modelsLoaded) && !camError && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950/95 z-10">
-                <RefreshCw className="h-8 w-8 text-[var(--accent-purple)] animate-spin" />
-                <p className="text-xs font-semibold animate-pulse text-slate-300">
-                  {!modelsLoaded ? "กำลังดาวน์โหลดไฟล์วิเคราะห์ใบหน้า..." : "กำลังเริ่มต้นกล้อง..."}
-                </p>
-              </div>
-            )}
-
-            {/* Camera error */}
-            {camError && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950 text-center p-6 z-10">
-                <AlertCircle className="h-10 w-10 text-yellow-500" />
-                <p className="text-xs text-slate-400 leading-relaxed">{camError}</p>
-              </div>
-            )}
-
-            {/* Live Video */}
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="absolute inset-0 w-full h-full object-cover"
-              style={{ transform: "scaleX(-1)", display: camReady ? "block" : "none" }}
-            />
-
-            {/* Laser Scan Line */}
-            {camReady && !capturePreview && (
-              <div className="scan-line" />
-            )}
-
-            {/* Search: captured preview */}
-            {mode === "search" && capturePreview && (
-              <img src={capturePreview} alt="Captured" className="absolute inset-0 w-full h-full object-cover z-20" />
-            )}
-
-            {/* Oval Guide */}
-            {camReady && !capturePreview && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-                <div className={`w-[170px] h-[220px] rounded-[50%] border-2 transition-all duration-300 ${
-                  faceCentered
-                    ? "border-green-500 border-solid scale-102 bg-green-500/5 shadow-[0_0_20px_rgba(34,197,94,0.3)]"
-                    : faceDetected
-                    ? "border-yellow-400 border-dashed animate-pulse"
-                    : "border-white/30 border-dashed"
-                }`} />
-              </div>
-            )}
-
-            {/* Interactive Emoji Guidance Card */}
-            {camReady && !capturePreview && (() => {
-              const guide = getBottomGuideState();
-              return (
-                <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-2 z-20 pointer-events-none px-4">
-                  <div className="bg-[#0b0c16]/95 border border-white/10 backdrop-blur-md rounded-2xl px-5 py-3 flex items-center gap-4 shadow-[0_12px_36px_rgba(0,0,0,0.6)] transition-all duration-300">
-                    <div className="relative flex items-center justify-center w-14 h-14 bg-white/5 rounded-full overflow-hidden border border-white/10 shrink-0">
-                      
-                      {/* Animated Emoji */}
-                      <span className={`text-3xl ${guide.animateClass}`}>{guide.emoji}</span>
-
-                      {/* Progress Circle SVG */}
-                      <svg className="absolute inset-0 w-full h-full -rotate-90">
-                        <circle
-                          cx="28"
-                          cy="28"
-                          r="25"
-                          fill="none"
-                          stroke="rgba(255, 255, 255, 0.08)"
-                          strokeWidth="3"
-                        />
-                        <circle
-                          cx="28"
-                          cy="28"
-                          r="25"
-                          fill="none"
-                          stroke={guide.color}
-                          strokeWidth="3"
-                          strokeDasharray={2 * Math.PI * 25}
-                          strokeDashoffset={2 * Math.PI * 25 * (1 - stableCount / REQUIRED_STABLE_FRAMES)}
-                          className="transition-all duration-150"
-                          strokeLinecap="round"
-                        />
-                      </svg>
-                    </div>
-
-                    <div className="flex flex-col text-left">
-                      <span className="text-slate-400 text-[10px] uppercase tracking-wider font-semibold">
-                        {guide.label}
-                      </span>
-                      <span className="text-white text-xs font-bold font-sans mt-0.5 leading-snug">
-                        {guide.text}
-                      </span>
-                    </div>
+                {/* Camera not ready */}
+                {(!camReady || !modelsLoaded) && !camError && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950/95 z-10">
+                    <RefreshCw className="h-8 w-8 text-[var(--accent-purple)] animate-spin" />
+                    <p className="text-xs font-semibold animate-pulse text-slate-300">
+                      {!modelsLoaded ? "กำลังดาวน์โหลดไฟล์วิเคราะห์ใบหน้า..." : "กำลังเริ่มต้นกล้อง..."}
+                    </p>
                   </div>
-                </div>
-              );
-            })()}
+                )}
 
-            {/* Processing Overlay */}
-            {processing && (
-              <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 text-white z-30">
-                <RefreshCw className="h-8 w-8 text-[var(--accent-purple)] animate-spin" />
-                <p className="text-xs font-medium text-slate-300">
-                  {mode === "enroll" ? "กำลังประมวลผลและเข้ารหัสใบหน้า..." : "กำลังค้นหาใบหน้าในอัลบั้ม..."}
-                </p>
+                {/* Camera error */}
+                {camError && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950 text-center p-6 z-10">
+                    <AlertCircle className="h-10 w-10 text-yellow-500" />
+                    <p className="text-xs text-slate-400 leading-relaxed">{camError}</p>
+                  </div>
+                )}
+
+                {/* Live Video */}
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="absolute inset-0 w-full h-full object-cover"
+                  style={{ transform: "scaleX(-1)", display: camReady ? "block" : "none" }}
+                />
+
+                {/* Canvas AR Overlay (replaces CSS oval) */}
+                {camReady && !capturePreview && (
+                  <canvas
+                    ref={canvasRef}
+                    className="absolute inset-0 w-full h-full pointer-events-none z-10"
+                    style={{ transform: "scaleX(1)" }}
+                  />
+                )}
+
+                {/* Laser Scan Line */}
+                {camReady && !capturePreview && (
+                  <div className="scan-line" />
+                )}
+
+                {/* Search: captured preview */}
+                {mode === "search" && capturePreview && (
+                  <img src={capturePreview} alt="Captured" className="absolute inset-0 w-full h-full object-cover z-20" />
+                )}
+
+                {/* Interactive Emoji Guidance Card */}
+                {camReady && !capturePreview && (() => {
+                  const guide = getBottomGuideState();
+                  return (
+                    <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-2 z-20 pointer-events-none px-4">
+                      <div className="bg-[#0b0c16]/95 border border-white/10 backdrop-blur-md rounded-2xl px-5 py-3 flex items-center gap-4 shadow-[0_12px_36px_rgba(0,0,0,0.6)] transition-all duration-300">
+                        <div className="relative flex items-center justify-center w-14 h-14 bg-white/5 rounded-full overflow-hidden border border-white/10 shrink-0">
+                          
+                          {/* Animated Emoji */}
+                          <span className={`text-3xl ${guide.animateClass}`}>{guide.emoji}</span>
+
+                          {/* Progress Circle SVG */}
+                          <svg className="absolute inset-0 w-full h-full -rotate-90">
+                            <circle
+                              cx="28"
+                              cy="28"
+                              r="25"
+                              fill="none"
+                              stroke="rgba(255, 255, 255, 0.08)"
+                              strokeWidth="3"
+                            />
+                            <circle
+                              cx="28"
+                              cy="28"
+                              r="25"
+                              fill="none"
+                              stroke={guide.color}
+                              strokeWidth="3"
+                              strokeDasharray={2 * Math.PI * 25}
+                              strokeDashoffset={2 * Math.PI * 25 * (1 - stableCount / REQUIRED_STABLE_FRAMES)}
+                              className="transition-all duration-150"
+                              strokeLinecap="round"
+                            />
+                          </svg>
+                        </div>
+
+                        <div className="flex flex-col text-left">
+                          <span className="text-slate-400 text-[10px] uppercase tracking-wider font-semibold">
+                            {guide.label}
+                          </span>
+                          <span className="text-white text-xs font-bold font-sans mt-0.5 leading-snug">
+                            {guide.text}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Processing Overlay */}
+                {processing && (
+                  <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 text-white z-30">
+                    <RefreshCw className="h-8 w-8 text-[var(--accent-purple)] animate-spin" />
+                    <p className="text-xs font-medium text-slate-300">
+                      {mode === "enroll" ? "กำลังประมวลผลและเข้ารหัสใบหน้า..." : "กำลังค้นหาใบหน้าในอัลบั้ม..."}
+                    </p>
+                  </div>
+                )}
+
+                {/* Success check */}
+                {!processing && (mode === "search" ? capturePreview : enrollDone) && (
+                  <div className="absolute bottom-4 right-4 bg-[var(--accent-green)] text-white rounded-full p-1.5 shadow-lg z-20">
+                    <CheckCircle2 className="h-6 w-6" />
+                  </div>
+                )}
               </div>
-            )}
 
-            {/* Success check */}
-            {!processing && (mode === "search" ? capturePreview : enrollDone) && (
-              <div className="absolute bottom-4 right-4 bg-[var(--accent-green)] text-white rounded-full p-1.5 shadow-lg z-20">
-                <CheckCircle2 className="h-6 w-6" />
-              </div>
-            )}
-          </div>
+              {/* Enroll: thumbnail strip */}
+              {mode === "enroll" && previews.length > 0 && (
+                <div className="flex gap-3">
+                  {previews.map((url, i) => (
+                    <div key={i} className="flex-1 aspect-square rounded-2xl overflow-hidden border-2 border-[var(--accent-green)] shadow-md transition-all duration-300 hover:scale-105">
+                      <img src={url} alt={ANGLES[i]} className="w-full h-full object-cover" />
+                    </div>
+                  ))}
+                  {ANGLES.slice(previews.length).map((a) => (
+                    <div key={a} className="flex-1 aspect-square rounded-2xl border-2 border-dashed border-[var(--border)] flex items-center justify-center bg-[var(--surface)] text-[var(--text3)]">
+                      <span className="text-[10px] font-bold text-center leading-tight">
+                        {a === "ตรง" ? "มองตรง" : a === "ซ้าย" ? "หันซ้าย" : "หันขวา"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
 
-          {/* Enroll: thumbnail strip */}
-          {mode === "enroll" && previews.length > 0 && (
-            <div className="flex gap-3">
-              {previews.map((url, i) => (
-                <div key={i} className="flex-1 aspect-square rounded-2xl overflow-hidden border-2 border-[var(--accent-green)] shadow-md transition-all duration-300 hover:scale-105">
-                  <img src={url} alt={ANGLES[i]} className="w-full h-full object-cover" />
+          {/* ═══ UPLOAD TAB ═══ */}
+          {activeTab === "upload" && (
+            <>
+              {!uploadPreview ? (
+                /* Drop zone */
+                <div
+                  className={`relative aspect-[4/3] w-full rounded-2xl overflow-hidden flex flex-col items-center justify-center gap-4 cursor-pointer transition-all duration-300 border-2 border-dashed ${
+                    dragOver
+                      ? "drag-active border-[var(--accent-blue)]"
+                      : "border-[var(--border)] hover:border-[var(--accent-purple)]/50 bg-[var(--surface)]/50 hover:bg-[var(--surface)]"
+                  }`}
+                  onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={handleFileDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png"
+                    className="hidden"
+                    onChange={handleFileSelect}
+                  />
+
+                  <div className="p-4 bg-[var(--accent-purple)]/10 rounded-full border border-[var(--accent-purple)]/20">
+                    <ImagePlus className="h-10 w-10 text-[var(--accent-purple)]" />
+                  </div>
+                  <div className="text-center space-y-1.5">
+                    <p className="text-sm font-bold text-[var(--text)]">
+                      ลากรูปวางที่นี่ หรือคลิกเพื่อเลือกไฟล์
+                    </p>
+                    <p className="text-[11px] text-[var(--text3)]">
+                      รองรับ JPG, PNG — ควรเป็นรูปที่เห็นใบหน้าชัดเจน
+                    </p>
+                  </div>
+
+                  {dragOver && (
+                    <div className="absolute inset-0 bg-[var(--accent-blue)]/5 flex items-center justify-center rounded-2xl pointer-events-none">
+                      <p className="text-sm font-bold text-[var(--accent-blue)] animate-pulse">ปล่อยเพื่ออัปโหลด</p>
+                    </div>
+                  )}
                 </div>
-              ))}
-              {ANGLES.slice(previews.length).map((a) => (
-                <div key={a} className="flex-1 aspect-square rounded-2xl border-2 border-dashed border-[var(--border)] flex items-center justify-center bg-[var(--surface)] text-[var(--text3)]">
-                  <span className="text-[10px] font-bold text-center leading-tight">
-                    {a === "ตรง" ? "มองตรง" : a === "ซ้าย" ? "หันซ้าย" : "หันขวา"}
-                  </span>
+              ) : (
+                /* Preview with AR overlay */
+                <div className="relative aspect-[4/3] w-full rounded-2xl overflow-hidden bg-black/60 border border-[var(--border)]">
+                  <img
+                    ref={uploadImgRef}
+                    src={uploadPreview}
+                    alt="Upload preview"
+                    className="absolute inset-0 w-full h-full object-contain"
+                  />
+
+                  {/* Canvas overlay for face detection visualization */}
+                  <canvas
+                    ref={uploadCanvasRef}
+                    className="absolute inset-0 w-full h-full pointer-events-none object-contain"
+                  />
+
+                  {/* Detecting spinner */}
+                  {uploadDetecting && (
+                    <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-10">
+                      <RefreshCw className="h-8 w-8 text-[var(--accent-purple)] animate-spin" />
+                      <p className="text-xs font-semibold text-slate-300 animate-pulse">กำลังวิเคราะห์ใบหน้าจากรูปที่อัปโหลด...</p>
+                    </div>
+                  )}
+
+                  {/* Detection result badge */}
+                  {!uploadDetecting && (
+                    <div className={`absolute top-3 left-3 px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 z-10 ${
+                      uploadFaceDetected
+                        ? "bg-green-950/70 text-[var(--accent-green)] border border-green-900/30"
+                        : "bg-red-950/70 text-[var(--accent-red)] border border-red-900/30"
+                    }`}>
+                      {uploadFaceDetected ? (
+                        <><CheckCircle2 className="h-3.5 w-3.5" /> ตรวจพบใบหน้า</>
+                      ) : (
+                        <><AlertCircle className="h-3.5 w-3.5" /> ไม่พบใบหน้า</>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Clear button */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); clearUpload(); }}
+                    className="absolute top-3 right-3 p-2 bg-black/50 hover:bg-black/70 text-white/80 hover:text-white rounded-xl backdrop-blur-sm transition-all z-10 border border-white/10"
+                    title="ลบรูปนี้"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+
+                  {/* Processing overlay */}
+                  {processing && (
+                    <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 text-white z-20">
+                      <RefreshCw className="h-8 w-8 text-[var(--accent-purple)] animate-spin" />
+                      <p className="text-xs font-medium text-slate-300">
+                        {mode === "enroll" ? "กำลังประมวลผลและเข้ารหัสใบหน้า..." : "กำลังค้นหาใบหน้าในอัลบั้ม..."}
+                      </p>
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
 
           {/* Errors */}
@@ -766,67 +1293,119 @@ export function FaceScanModal({
         {/* Modal Footer */}
         <div className="p-5 border-t border-[var(--border)] bg-black/40 flex gap-3">
           
-          {/* ENROLL MODE CONTROLS */}
-          {mode === "enroll" && !enrollDone && (
-            <div className="w-full text-center text-xs font-medium text-slate-400 py-2">
-              💡 กรุณาจัดใบหน้าให้อยู่ในกรอบประชิดและหันตามมุมที่ระบุ ระบบจะจับภาพอัตโนมัติ
-            </div>
-          )}
-
-          {mode === "enroll" && enrollDone && (
+          {/* ═══ CAMERA TAB FOOTER ═══ */}
+          {activeTab === "camera" && (
             <>
-              <button
-                onClick={() => { setStep(0); setCaptures([]); setPreviews([]); }}
-                disabled={processing}
-                className="flex-1 py-3 bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface-hover)] text-white font-bold rounded-2xl text-sm transition-all"
-              >
-                สแกนใหม่
-              </button>
-              <button
-                onClick={handleEnrollSubmit}
-                disabled={processing}
-                className="flex-[2] py-3 bg-[var(--accent-green)] hover:brightness-110 disabled:opacity-70 text-white font-bold rounded-2xl text-sm transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(34,197,94,0.4)]"
-              >
-                <UserCheck className="h-4 w-4" />
-                <span>บันทึกใบหน้าลงระบบ</span>
-              </button>
+              {/* ENROLL MODE CONTROLS */}
+              {mode === "enroll" && !enrollDone && (
+                <div className="w-full text-center text-xs font-medium text-slate-400 py-2">
+                  💡 กรุณาจัดใบหน้าให้อยู่ในกรอบประชิดและหันตามมุมที่ระบุ ระบบจะจับภาพอัตโนมัติ
+                </div>
+              )}
+
+              {mode === "enroll" && enrollDone && (
+                <>
+                  <button
+                    onClick={() => { setStep(0); setCaptures([]); setPreviews([]); }}
+                    disabled={processing}
+                    className="flex-1 py-3 bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface-hover)] text-white font-bold rounded-2xl text-sm transition-all"
+                  >
+                    สแกนใหม่
+                  </button>
+                  <button
+                    onClick={handleEnrollSubmit}
+                    disabled={processing}
+                    className="flex-[2] py-3 bg-[var(--accent-green)] hover:brightness-110 disabled:opacity-70 text-white font-bold rounded-2xl text-sm transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(34,197,94,0.4)]"
+                  >
+                    <UserCheck className="h-4 w-4" />
+                    <span>บันทึกใบหน้าลงระบบ</span>
+                  </button>
+                </>
+              )}
+
+              {/* SEARCH MODE CONTROLS */}
+              {mode === "search" && !capturePreview && (
+                <div className="w-full text-center text-xs font-medium text-slate-400 py-2">
+                  💡 ขยับใบหน้าของคุณมาตรงกลางกรอบ ระบบจะจับภาพและสแกนค้นหารูปภาพอัตโนมัติ
+                </div>
+              )}
+
+              {mode === "search" && capturePreview && !processing && (
+                <>
+                  <button
+                    onClick={() => { setCaptureFile(null); setCapturePreview(null); }}
+                    className="flex-1 py-3 bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface-hover)] text-white font-bold rounded-2xl text-sm transition-all"
+                  >
+                    สแกนใหม่
+                  </button>
+
+                  <div className="flex-[2] flex flex-col gap-2">
+                    <button
+                      onClick={() => handleSearch(false)}
+                      className="w-full py-3 bg-gradient-to-r from-[var(--accent-blue)] to-[var(--accent-purple)] hover:brightness-110 text-white font-bold rounded-2xl text-sm transition-all flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                    >
+                      <span>ค้นหารูปภาพทันที</span>
+                    </button>
+
+                    {session?.user && !session.user.faceEnrolled && (
+                      <button
+                        onClick={() => handleSearch(true)}
+                        className="w-full py-2 border border-[var(--border)] bg-[var(--surface-hover)] hover:bg-slate-800/40 text-[var(--accent-blue)] font-bold rounded-2xl text-xs transition-all flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                      >
+                        <UserCheck className="h-3.5 w-3.5" />
+                        <span>ค้นหาพร้อมบันทึกใบหน้าลงโปรไฟล์</span>
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
             </>
           )}
 
-          {/* SEARCH MODE CONTROLS */}
-          {mode === "search" && !capturePreview && (
-            <div className="w-full text-center text-xs font-medium text-slate-400 py-2">
-              💡 ขยับใบหน้าของคุณมาตรงกลางกรอบ ระบบจะจับภาพและสแกนค้นหารูปภาพอัตโนมัติ
-            </div>
-          )}
-
-          {mode === "search" && capturePreview && !processing && (
+          {/* ═══ UPLOAD TAB FOOTER ═══ */}
+          {activeTab === "upload" && (
             <>
-              <button
-                onClick={() => { setCaptureFile(null); setCapturePreview(null); }}
-                className="flex-1 py-3 bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface-hover)] text-white font-bold rounded-2xl text-sm transition-all"
-              >
-                สแกนใหม่
-              </button>
+              {!hasUploadResult && (
+                <div className="w-full text-center text-xs font-medium text-slate-400 py-2">
+                  📁 เลือกรูปภาพที่เห็นใบหน้าของคุณชัดเจน ระบบจะตรวจจับใบหน้าอัตโนมัติ
+                </div>
+              )}
 
-              <div className="flex-[2] flex flex-col gap-2">
-                <button
-                  onClick={() => handleSearch(false)}
-                  className="w-full py-3 bg-gradient-to-r from-[var(--accent-blue)] to-[var(--accent-purple)] hover:brightness-110 text-white font-bold rounded-2xl text-sm transition-all flex items-center justify-center gap-1.5 active:scale-[0.98]"
-                >
-                  <span>ค้นหารูปภาพทันที</span>
-                </button>
-
-                {session?.user && !session.user.faceEnrolled && (
+              {hasUploadResult && !processing && (
+                <>
                   <button
-                    onClick={() => handleSearch(true)}
-                    className="w-full py-2 border border-[var(--border)] bg-[var(--surface-hover)] hover:bg-slate-800/40 text-[var(--accent-blue)] font-bold rounded-2xl text-xs transition-all flex items-center justify-center gap-1.5 active:scale-[0.98]"
+                    onClick={clearUpload}
+                    className="flex-1 py-3 bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface-hover)] text-white font-bold rounded-2xl text-sm transition-all"
                   >
-                    <UserCheck className="h-3.5 w-3.5" />
-                    <span>ค้นหาพร้อมบันทึกใบหน้าลงโปรไฟล์</span>
+                    เลือกรูปใหม่
                   </button>
-                )}
-              </div>
+
+                  {canSubmitUpload && (
+                    <button
+                      onClick={handleUploadSubmit}
+                      disabled={processing}
+                      className={`flex-[2] py-3 hover:brightness-110 disabled:opacity-70 text-white font-bold rounded-2xl text-sm transition-all flex items-center justify-center gap-1.5 ${
+                        mode === "enroll"
+                          ? "bg-[var(--accent-green)] shadow-[0_0_15px_rgba(34,197,94,0.4)]"
+                          : "bg-gradient-to-r from-[var(--accent-blue)] to-[var(--accent-purple)]"
+                      }`}
+                    >
+                      {mode === "enroll" ? (
+                        <><UserCheck className="h-4 w-4" /><span>บันทึกใบหน้าลงระบบ</span></>
+                      ) : (
+                        <span>ค้นหารูปภาพทันที</span>
+                      )}
+                    </button>
+                  )}
+
+                  {!uploadFaceDetected && (
+                    <div className="flex-[2] py-3 bg-slate-800/50 text-slate-500 font-bold rounded-2xl text-sm flex items-center justify-center gap-1.5 cursor-not-allowed">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>ไม่พบใบหน้าในรูป</span>
+                    </div>
+                  )}
+                </>
+              )}
             </>
           )}
         </div>
