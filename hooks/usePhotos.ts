@@ -8,7 +8,7 @@ import { FilterValues } from "@/components/gallery/FilterBar";
 export interface UsePhotosOptions {
   /** Initial filter values */
   defaultFilters?: FilterValues;
-  /** Number of items per page (default 48) */
+  /** Number of items per page (default 30) */
   pageSize?: number;
   /** If true, use face search API instead of browse API (my-photos mode) */
   faceSearchMode?: boolean;
@@ -55,7 +55,7 @@ export interface UsePhotosReturn {
 export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
   const {
     defaultFilters = { sortBy: "newest", status: "approved" },
-    pageSize = 48,
+    pageSize = 30,
     faceSearchMode = false,
     user = null,
   } = options;
@@ -66,6 +66,9 @@ export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Cursor for cursor-based pagination
+  const cursorRef = useRef<string | null>(null);
 
   // Face search states (gallery overlay mode)
   const [faceSearchResults, setFaceSearchResults] = useState<any[] | null>(null);
@@ -81,10 +84,10 @@ export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
   // Filter states
   const [filters, setFilters] = useState<FilterValues>(defaultFilters);
 
-  // Ref to track if a load-more request is already in-flight, preventing duplicates
+  // Ref to prevent duplicate in-flight requests
   const loadingRef = useRef(false);
 
-  // Load Season & Events
+  // ── Load Season & Events ─────────────────────────────────────────
   useEffect(() => {
     const loadEvents = async () => {
       try {
@@ -96,7 +99,6 @@ export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
         if (data.success) {
           setSelectedSeason(data.season);
           setEventsList(data.events || []);
-          // Reset event selection if switching seasons
           if (selectedSeason?.id && selectedEvent) {
             setSelectedEvent(null);
           }
@@ -111,20 +113,29 @@ export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSeason?.id]);
 
-  // ── Gallery browse fetch ──────────────────────────────────────────
+  // ── Gallery browse fetch (cursor-based) ─────────────────────────
   const fetchPhotos = useCallback(
     async (pageNum: number, currentFilters: FilterValues, isAppend = false) => {
       if (faceSearchResults !== null) return;
+      if (loadingRef.current) return;
 
       setLoading(true);
       loadingRef.current = true;
       setError(null);
+
       try {
         const queryParams: Record<string, string> = {
-          page: pageNum.toString(),
           limit: pageSize.toString(),
           status: currentFilters.status || "approved",
         };
+
+        // Use cursor for appending, page for reset
+        if (isAppend && cursorRef.current) {
+          queryParams.cursor = cursorRef.current;
+        } else {
+          queryParams.page = pageNum.toString();
+          cursorRef.current = null; // reset cursor on fresh fetch
+        }
 
         if (selectedEvent) {
           queryParams.eventId = selectedEvent;
@@ -138,23 +149,33 @@ export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
 
         const query = new URLSearchParams(queryParams);
         const res = await fetch(`/api/photos?${query.toString()}`);
-        if (!res.ok) {
-          throw new Error(`HTTP error! status: ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+
         const data = await res.json();
 
         if (data.success) {
-          let list = data.photos;
+          let list: any[] = data.photos;
           if (currentFilters.sortBy === "oldest") {
             list = [...list].reverse();
           }
+
           setPhotos((prev) => (isAppend ? [...prev, ...list] : list));
-          setHasMore(data.page < data.totalPages);
+
+          // Store next cursor for subsequent load-more calls
+          cursorRef.current = data.nextCursor ?? null;
+
+          // hasMore from API (cursor-based) or calculate from page info
+          const moreAvailable =
+            data.hasMore !== undefined
+              ? data.hasMore
+              : data.page < data.totalPages;
+          setHasMore(moreAvailable);
         } else {
           throw new Error(data.error || "Failed to fetch photos");
         }
-      } catch (err: any) {
-        console.error("Error fetching photos:", err);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("Error fetching photos:", msg);
         setError("ไม่สามารถดึงข้อมูลรูปภาพได้ กรุณาลองใหม่อีกครั้ง");
         setHasMore(false);
       } finally {
@@ -162,6 +183,7 @@ export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
         loadingRef.current = false;
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [faceSearchResults, selectedEvent, selectedSeason?.id, selectedTimeslot, pageSize]
   );
 
@@ -175,7 +197,7 @@ export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
     setLoading(true);
     setError(null);
     try {
-      const searchBody: Record<string, any> = { limit: 100 };
+      const searchBody: Record<string, unknown> = { limit: 100 };
 
       if (selectedEvent) {
         searchBody.eventId = selectedEvent;
@@ -206,7 +228,7 @@ export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
     }
   }, [user?.faceEnrolled, selectedEvent, selectedSeason?.id, selectedTimeslot]);
 
-  // ── Stable handleLoadMore (Bug 1 fix) ─────────────────────────────
+  // ── Stable handleLoadMore (no re-subscribe Observer) ─────────────
   const handleLoadMore = useCallback(() => {
     if (loadingRef.current || !hasMore || faceSearchResults !== null) return;
     setPage((prev) => {
@@ -216,7 +238,7 @@ export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
     });
   }, [hasMore, faceSearchResults, fetchPhotos, filters]);
 
-  // Reload photos when filters or season/event/timeslot selection changes
+  // Reload photos when filters/season/event/timeslot changes
   useEffect(() => {
     if (seasonLoading) return;
 
@@ -224,6 +246,7 @@ export function usePhotos(options: UsePhotosOptions = {}): UsePhotosReturn {
       fetchMyPhotos();
     } else {
       setPage(1);
+      cursorRef.current = null;
       fetchPhotos(1, filters, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -18,9 +18,11 @@ interface PhotoModalProps {
 export function PhotoModal({ photo, photos = [], currentIndex = 0, onClose, onNavigate }: PhotoModalProps) {
   const [src, setSrc] = useState("");
   const [editorOpen, setEditorOpen] = useState(false);
+  const [imageLoading, setImageLoading] = useState(false);
 
   useEffect(() => {
     if (photo) {
+      setImageLoading(true);
       setSrc(photo.thumbnailUrl || photo.thumbnailSm || photo.driveUrl);
     }
   }, [photo]);
@@ -65,11 +67,24 @@ export function PhotoModal({ photo, photos = [], currentIndex = 0, onClose, onNa
 
           {/* Left: Image display */}
           <div className="relative flex-1 bg-black/50 flex items-center justify-center min-h-[300px] md:max-h-[92vh] border-b md:border-b-0 md:border-r border-[var(--border)]">
+          {/* Loading overlay */}
+            {imageLoading && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                <div className="h-8 w-8 rounded-full border-2 border-[var(--accent-purple)] border-t-transparent animate-spin" />
+              </div>
+            )}
+
             <img
               src={src}
               alt={photo.filename}
-              className="max-w-full max-h-full object-contain p-2"
-              onError={() => setSrc("https://images.unsplash.com/photo-1452626038306-9aae5e071dd3?auto=format&fit=crop&w=800&q=80")}
+              className={`max-w-full max-h-full object-contain p-2 transition-opacity duration-300 ${
+                imageLoading ? "opacity-0" : "opacity-100"
+              }`}
+              onLoad={() => setImageLoading(false)}
+              onError={() => {
+                setImageLoading(false);
+                setSrc("https://images.unsplash.com/photo-1452626038306-9aae5e071dd3?auto=format&fit=crop&w=800&q=80");
+              }}
             />
 
             {/* Navigation arrows */}
@@ -153,13 +168,13 @@ export function PhotoModal({ photo, photos = [], currentIndex = 0, onClose, onNa
 
               {/* Download original */}
               <a
-                href={photo.driveUrl}
+                href={`/api/photos/download?id=${photo.id}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="w-full py-3 bg-[var(--surface)] border border-[var(--border)] hover:bg-[var(--surface-hover)] text-white font-semibold text-sm rounded-2xl transition-all flex items-center justify-center gap-2"
               >
                 <Download className="h-4 w-4" />
-                <span>ดาวน์โหลดต้นฉบับ</span>
+                <span>ดาวน์โหลดรูปภาพ</span>
               </a>
               <p className="text-[9px] text-center text-[var(--text3)]">
                 ต้นฉบับความละเอียดสูงจาก Google Drive

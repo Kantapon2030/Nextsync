@@ -35,16 +35,31 @@ export default function MyPhotosPage() {
     setDownloading(true);
     try {
       for (const photo of photos) {
-        const url = photo.driveUrl || photo.thumbnailUrl;
+        // Use R2 thumbnailUrl (same-origin) for reliable download, fallback to Drive URL
+        const url = photo.thumbnailUrl || photo.thumbnailSm || photo.driveUrl;
         if (!url) continue;
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = photo.filename || "nextsync_photo.jpg";
-        a.target = "_blank";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        await new Promise((resolve) => setTimeout(resolve, 600)); // Delay to prevent browser blocking
+
+        // Use fetch to download and create object URL for cross-origin support
+        try {
+          const response = await fetch(url);
+          if (response.ok) {
+            const blob = await response.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = objectUrl;
+            a.download = photo.filename || "nextsync_photo.jpg";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(objectUrl);
+          } else {
+            // Fallback: open in new tab
+            window.open(url, "_blank", "noopener,noreferrer");
+          }
+        } catch {
+          window.open(url, "_blank", "noopener,noreferrer");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 800)); // Delay to prevent browser blocking
       }
     } catch (err) {
       console.error("Download all error:", err);
@@ -53,11 +68,22 @@ export default function MyPhotosPage() {
     }
   };
 
+  // Show loading state while session is being determined
   if (status === "loading") {
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-3 select-none">
         <RefreshCw className="h-8 w-8 text-[var(--accent-purple)] animate-spin" />
         <p className="text-xs font-semibold text-[var(--text2)] animate-pulse">กำลังตรวจสอบข้อมูลสมาชิก...</p>
+      </div>
+    );
+  }
+
+  // Show redirect message while redirecting unauthenticated users
+  if (status === "unauthenticated") {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-3 select-none">
+        <RefreshCw className="h-8 w-8 text-[var(--accent-purple)] animate-spin" />
+        <p className="text-xs font-semibold text-[var(--text2)] animate-pulse">กำลังนำท่านไปหน้าเข้าสู่ระบบ...</p>
       </div>
     );
   }

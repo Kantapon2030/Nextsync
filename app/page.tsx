@@ -5,6 +5,9 @@ import { NextsyncLogo } from "@/components/shared/NextsyncLogo";
 import { NextsyncWordmark } from "@/components/shared/NextsyncWordmark";
 import { FeatureCard } from "@/components/shared/FeatureCard";
 
+// Prevent static generation — page uses auth() which requires DB (incl. pgvector)
+export const dynamic = "force-dynamic";
+
 export default async function IndexPage() {
   const session = await auth();
   const scanHref = session ? "/my-photos" : "/auth/login?next=my-photos";

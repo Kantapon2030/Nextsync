@@ -450,6 +450,12 @@ export function FaceScanModal({
     const runLoop = async () => {
       if (!active || !videoRef.current) return;
 
+      // Pause detection when browser tab is hidden to save CPU
+      if (document.visibilityState === "hidden") {
+        if (active) loopRef.current = requestAnimationFrame(runLoop);
+        return;
+      }
+
       try {
         const video = videoRef.current;
         if (video.paused || video.ended || video.readyState < 2) {
@@ -857,90 +863,6 @@ export function FaceScanModal({
 
   return createPortal(
     <div className="fixed inset-0 bg-[#060813]/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      
-      {/* Premium Sci-Fi Visual Effects & Animations */}
-      <style jsx global>{`
-        @keyframes rainbow-glow {
-          0% { box-shadow: 0 0 15px #ec4899, inset 0 0 10px #ec4899; border-color: #ec4899; }
-          20% { box-shadow: 0 0 15px #8b5cf6, inset 0 0 10px #8b5cf6; border-color: #8b5cf6; }
-          40% { box-shadow: 0 0 15px #06b6d4, inset 0 0 10px #06b6d4; border-color: #06b6d4; }
-          60% { box-shadow: 0 0 15px #10b981, inset 0 0 10px #10b981; border-color: #10b981; }
-          80% { box-shadow: 0 0 15px #f59e0b, inset 0 0 10px #f59e0b; border-color: #f59e0b; }
-          100% { box-shadow: 0 0 15px #ec4899, inset 0 0 10px #ec4899; border-color: #ec4899; }
-        }
-        .rainbow-border {
-          animation: rainbow-glow 3s linear infinite;
-          border-width: 3px !important;
-        }
-        @keyframes heartbeat-pulse {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.15); }
-        }
-        @keyframes slide-hand-left {
-          0%, 100% { transform: translateX(0); }
-          50% { transform: translateX(-8px); }
-        }
-        @keyframes slide-hand-right {
-          0%, 100% { transform: translateX(0); }
-          50% { transform: translateX(8px); }
-        }
-        @keyframes scan-move {
-          0% { top: 0%; opacity: 0.1; }
-          50% { top: 100%; opacity: 0.9; }
-          100% { top: 0%; opacity: 0.1; }
-        }
-        .animate-heartbeat {
-          animation: heartbeat-pulse 1.2s ease-in-out infinite;
-        }
-        .animate-slide-left {
-          animation: slide-hand-left 1.2s ease-in-out infinite;
-        }
-        .animate-slide-right {
-          animation: slide-hand-right 1.2s ease-in-out infinite;
-        }
-        .scan-line {
-          position: absolute;
-          left: 0;
-          width: 100%;
-          height: 3px;
-          background: linear-gradient(90deg, transparent, #06b6d4, transparent);
-          box-shadow: 0 0 10px #06b6d4, 0 0 20px #06b6d4;
-          animation: scan-move 3s ease-in-out infinite;
-          z-index: 15;
-          pointer-events: none;
-        }
-        .corner-bracket {
-          position: absolute;
-          width: 24px;
-          height: 24px;
-          border-color: rgba(255, 255, 255, 0.45);
-          border-style: solid;
-          pointer-events: none;
-          z-index: 15;
-          transition: all 0.3s ease;
-        }
-        .corner-top-left { top: 16px; left: 16px; border-width: 3px 0 0 3px; border-top-left-radius: 8px; }
-        .corner-top-right { top: 16px; right: 16px; border-width: 3px 3px 0 0; border-top-right-radius: 8px; }
-        .corner-bottom-left { bottom: 16px; left: 16px; border-width: 0 0 3px 3px; border-bottom-left-radius: 8px; }
-        .corner-bottom-right { bottom: 16px; right: 16px; border-width: 0 3px 3px 0; border-bottom-right-radius: 8px; }
-        
-        .rainbow-border .corner-bracket {
-          border-color: #06b6d4;
-        }
-        .aligned-state .corner-bracket {
-          border-color: #22c55e !important;
-          box-shadow: 0 0 8px #22c55e;
-        }
-
-        @keyframes drag-pulse {
-          0%, 100% { border-color: rgba(79, 172, 254, 0.4); }
-          50% { border-color: rgba(79, 172, 254, 0.9); }
-        }
-        .drag-active {
-          animation: drag-pulse 1s ease-in-out infinite;
-          background: rgba(79, 172, 254, 0.05) !important;
-        }
-      `}</style>
 
       <div className="glass border border-[var(--border)] bg-[#0d0f1e]/95 max-w-lg w-full overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-250 select-none shadow-2xl">
 

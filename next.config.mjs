@@ -2,11 +2,11 @@
 const nextConfig = {
   experimental: {
     instrumentationHook: true,
-    serverComponentsExternalPackages: [
-      "@tensorflow/tfjs-node",
-      "@vladmandic/face-api",
-    ],
   },
+  serverExternalPackages: [
+    "@tensorflow/tfjs-node",
+    "@vladmandic/face-api",
+  ],
   images: {
     remotePatterns: [
       {
@@ -15,13 +15,22 @@ const nextConfig = {
       },
       {
         protocol: 'https',
+        hostname: 'lh3.googleusercontent.com',
+      },
+      {
+        protocol: 'https',
+        hostname: '**.googleusercontent.com',
+      },
+      {
+        protocol: 'https',
         hostname: '**.r2.dev',
       },
       {
         protocol: 'https',
         hostname: '**.cloudflarestorage.com',
-      }
+      },
     ],
+    formats: ['image/avif', 'image/webp'],
   },
   typescript: {
     // ignore build errors to make deployment fast and flexible

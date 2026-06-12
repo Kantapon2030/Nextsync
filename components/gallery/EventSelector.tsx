@@ -1,5 +1,5 @@
 // components/gallery/EventSelector.tsx
-import { Sparkles, Calendar, Sun, Sunset } from "lucide-react";
+import { Sun, Sunset } from "lucide-react";
 
 export interface Event {
   id: string;

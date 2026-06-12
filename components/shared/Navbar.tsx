@@ -118,13 +118,13 @@ export function Navbar() {
                   className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--surface-hover)] transition-all"
                 >
                   <div className="h-7 w-7 rounded-full bg-[var(--accent-purple)] flex items-center justify-center text-xs font-semibold text-white overflow-hidden">
-                    {session.user.image ? (
-                      <img src={session.user.image} alt={session.user.name || ""} className="h-7 w-7 rounded-full object-cover" />
+                    {session?.user?.image ? (
+                      <img src={session.user.image} alt={session?.user?.name || ""} className="h-7 w-7 rounded-full object-cover" />
                     ) : (
-                      (session.user.name || "U")[0].toUpperCase()
+                      (session?.user?.name || "U")[0].toUpperCase()
                     )}
                   </div>
-                  <span className="text-sm font-medium text-[var(--text)] max-w-[120px] truncate">{session.user.name}</span>
+                  <span className="text-sm font-medium text-[var(--text)] max-w-[120px] truncate">{session?.user?.name}</span>
                   <ChevronDown className="h-4 w-4 text-[var(--text2)]" />
                 </button>
 
@@ -134,7 +134,7 @@ export function Navbar() {
                       <p className="text-xs font-semibold text-[var(--text2)] capitalize">
                         {role === "admin" ? "ผู้ดูแลระบบ" : role === "photographer" ? "ช่างภาพ" : "นักเรียน"}
                       </p>
-                      <p className="text-[10px] text-[var(--text3)] mt-0.5">{session.user.studentId}</p>
+                      <p className="text-[10px] text-[var(--text3)] mt-0.5">{session?.user?.studentId}</p>
                     </div>
                     {role === "student" && (
                       <Link
@@ -223,14 +223,14 @@ export function Navbar() {
                 <div className="pb-4 border-b border-[var(--border)]">
                   <div className="flex items-center gap-3">
                     <div className="h-9 w-9 rounded-full bg-[var(--accent-purple)] flex items-center justify-center text-sm font-semibold text-white overflow-hidden">
-                      {session.user.image ? (
-                        <img src={session.user.image} alt={session.user.name || ""} className="h-9 w-9 rounded-full object-cover" />
+                      {session?.user?.image ? (
+                        <img src={session.user.image} alt={session?.user?.name || ""} className="h-9 w-9 rounded-full object-cover" />
                       ) : (
-                        (session.user.name || "U")[0].toUpperCase()
+                        (session?.user?.name || "U")[0].toUpperCase()
                       )}
                     </div>
                     <div>
-                      <p className="font-semibold text-sm text-[var(--text)]">{session.user.name}</p>
+                      <p className="font-semibold text-sm text-[var(--text)]">{session?.user?.name}</p>
                       <p className="text-xs text-[var(--text2)] capitalize">
                         {role === "admin" ? "ผู้ดูแลระบบ" : role === "photographer" ? "ช่างภาพ" : "นักเรียน"}
                       </p>

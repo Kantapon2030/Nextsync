@@ -73,20 +73,21 @@ export async function POST(req: Request) {
     // Build optional filter conditions using parameterized sql fragments (no raw strings)
     const conditions: SQL[] = [sql`p.status = 'approved'`];
 
+    // Filter by eventId or seasonId
     if (eventId && eventId !== "all" && eventId !== "null") {
       conditions.push(sql`p.event_id = ${eventId}`);
     } else if (seasonId && seasonId !== "all" && seasonId !== "null") {
       conditions.push(sql`p.season_id = ${seasonId}`);
     }
 
+    // Filter by timeslot
     if (timeslot && timeslot !== "all" && timeslot !== "null") {
       conditions.push(sql`p.timeslot = ${timeslot}`);
     }
 
     const whereClause = sql.join(conditions, sql` AND `);
 
-    // pgvector cosine distance search (<=> operator)
-    // Lower distance = more similar face
+    // pgvector cosine distance search (<=>) operator
     // DISTINCT ON photo to avoid returning same photo multiple times (multi-face photos)
     const query = sql`
       SELECT DISTINCT ON (p.id)
@@ -102,11 +103,13 @@ export async function POST(req: Request) {
         p.file_size AS "fileSize",
         p.width AS "width",
         p.height AS "height",
+        p.face_count AS "faceCount",
         p.created_at AS "createdAt",
         (pfe.embedding <=> ${queryVectorStr}::vector) AS "distance",
         (1 - (pfe.embedding <=> ${queryVectorStr}::vector)) AS "score"
       FROM photo_face_embeddings pfe
       JOIN photos p ON p.id = pfe.photo_id
+      JOIN events e ON e.id = p.event_id AND e.is_active = true
       WHERE
         ${whereClause}
         AND (pfe.embedding <=> ${queryVectorStr}::vector) < ${threshold}

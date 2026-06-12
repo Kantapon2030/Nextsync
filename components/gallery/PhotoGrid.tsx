@@ -1,17 +1,30 @@
 // components/gallery/PhotoGrid.tsx
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useLayoutEffect } from "react";
-import { PhotoCard, PhotoData } from "./PhotoCard";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  type KeyboardEvent,
+} from "react";
+import { PhotoCard, type PhotoData } from "./PhotoCard";
 import { PhotoModal } from "./PhotoModal";
+import { PhotoSkeleton } from "./PhotoSkeleton";
 import { LoadingGrid } from "@/components/shared/LoadingGrid";
-import { ImageOff, Loader2, LayoutGrid, Rows3 } from "lucide-react";
+import { ImageOff, Loader2, LayoutGrid } from "lucide-react";
+import { usePhotoVirtualizer } from "@/hooks/usePhotoVirtualizer";
+import type { UsePhotoSelectionReturn } from "@/hooks/usePhotoSelection";
 
 interface PhotoGridProps {
   photos: PhotoData[];
   loading: boolean;
   hasMore: boolean;
   onLoadMore: () => void;
+  /** Optional multi-select hook — when provided, enables checkbox UI */
+  selectionHook?: UsePhotoSelectionReturn;
 }
 
 type ColumnCount = 2 | 3 | 4 | 5;
@@ -23,100 +36,120 @@ const COLUMN_OPTIONS: { value: ColumnCount; label: string }[] = [
   { value: 5, label: "5" },
 ];
 
-const COLUMN_CLASS: Record<ColumnCount, string> = {
-  2: "columns-2",
-  3: "columns-2 sm:columns-3",
-  4: "columns-2 sm:columns-3 md:columns-4",
-  5: "columns-2 sm:columns-3 md:columns-4 lg:columns-5",
-};
-
-// Use useLayoutEffect on client, useEffect on server (SSR-safe)
+// SSR-safe layout effect
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
-export function PhotoGrid({ photos, loading, hasMore, onLoadMore }: PhotoGridProps) {
+export function PhotoGrid({
+  photos,
+  loading,
+  hasMore,
+  onLoadMore,
+  selectionHook,
+}: PhotoGridProps) {
   const [selectedPhoto, setSelectedPhoto] = useState<PhotoData | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
-  const [columns, setColumns] = useState<ColumnCount>(4);
-  const observerRef = useRef<HTMLDivElement>(null);
-  const gridRef = useRef<HTMLDivElement>(null);
+  const [customColumns, setCustomColumns] = useState<ColumnCount | undefined>(undefined);
 
-  // Track previous photo count to know when new items are appended
-  const prevPhotoCountRef = useRef(photos.length);
-  const scrollHeightBeforeAppendRef = useRef(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // ── Scroll position lock (Bug 2 fix) ─────────────────────────────
-  // Capture scrollHeight BEFORE React commits new DOM nodes from appended photos
-  if (photos.length > prevPhotoCountRef.current && prevPhotoCountRef.current > 0) {
-    // This runs during render (before commit). Store current scroll height.
-    scrollHeightBeforeAppendRef.current = document.documentElement.scrollHeight;
-  }
+  // Deduplicate photos by ID
+  const uniquePhotos = useMemo(
+    () => Array.from(new Map(photos.map((p) => [p.id, p])).values()),
+    [photos]
+  );
 
-  // After the DOM has been updated with new photos, restore scroll position
-  useIsomorphicLayoutEffect(() => {
-    const prevCount = prevPhotoCountRef.current;
-    if (photos.length > prevCount && prevCount > 0 && scrollHeightBeforeAppendRef.current > 0) {
-      const oldScrollHeight = scrollHeightBeforeAppendRef.current;
-      const newScrollHeight = document.documentElement.scrollHeight;
-      const delta = newScrollHeight - oldScrollHeight;
+  // Virtual scroll
+  const { virtualRows, totalHeight, colCount } = usePhotoVirtualizer(
+    uniquePhotos,
+    containerRef,
+    customColumns
+  );
 
-      // Only adjust if the user was NOT at the very top (i.e. they scrolled down)
-      if (delta > 0 && window.scrollY > 100) {
-        // The masonry layout may have reflowed existing items. We keep the viewport
-        // pinned to the same visual position by absorbing the height delta.
-        // In a CSS columns layout the reflow is minimal, so small adjustments suffice.
-        // We intentionally do NOT shift scrollTop — CSS columns append at the bottom
-        // of the flow, so the existing content stays in place. The key purpose here
-        // is to prevent the observer from re-triggering due to layout shift.
-      }
+  // Cell dimensions from virtualizer row
+  const cellWidth = useMemo(() => {
+    if (!containerRef.current || colCount === 0) return 0;
+    const gap = 12; // gap-3 = 12px
+    return Math.floor(
+      (containerRef.current.clientWidth - gap * (colCount - 1)) / colCount
+    );
+  }, [colCount]);
 
-      scrollHeightBeforeAppendRef.current = 0;
-    }
-    prevPhotoCountRef.current = photos.length;
-  }, [photos.length]);
+  const cellHeight = useMemo(() => {
+    return cellWidth > 0 ? Math.round(cellWidth * 1.4) : 300;
+  }, [cellWidth]);
 
-  // Deduplicate photos by ID to prevent key duplication warnings on React rendering
-  const uniquePhotos = Array.from(new Map(photos.map((p) => [p.id, p])).values());
-
-  // IntersectionObserver for infinite scroll — threshold 0.1 for early trigger
-  // onLoadMore is now a stable reference from useCallback, so observer won't reconnect
+  // ── Infinite scroll sentinel ──────────────────────────────────────
   useEffect(() => {
     if (!hasMore || loading) return;
-
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting) {
-          onLoadMore();
-        }
+        if (entries[0].isIntersecting) onLoadMore();
       },
-      { threshold: 0.1, rootMargin: "200px" }
+      { threshold: 0.1, rootMargin: "300px" }
     );
-
-    const currentTarget = observerRef.current;
-    if (currentTarget) observer.observe(currentTarget);
+    const el = sentinelRef.current;
+    if (el) observer.observe(el);
     return () => {
-      if (currentTarget) observer.unobserve(currentTarget);
+      if (el) observer.unobserve(el);
     };
   }, [hasMore, loading, onLoadMore]);
 
-  const handleView = useCallback((photo: PhotoData) => {
-    const idx = uniquePhotos.findIndex((p) => p.id === photo.id);
-    setSelectedIndex(idx >= 0 ? idx : 0);
-    setSelectedPhoto(photo);
-  }, [uniquePhotos]);
+  // ── Photo viewer handlers ─────────────────────────────────────────
+  const handleView = useCallback(
+    (photo: PhotoData) => {
+      const idx = uniquePhotos.findIndex((p) => p.id === photo.id);
+      setSelectedIndex(idx >= 0 ? idx : 0);
+      setSelectedPhoto(photo);
+    },
+    [uniquePhotos]
+  );
 
-  const handleNavigate = useCallback((dir: "prev" | "next") => {
-    setSelectedIndex((prev) => {
-      const next = dir === "prev" ? prev - 1 : prev + 1;
-      const clamped = Math.max(0, Math.min(uniquePhotos.length - 1, next));
-      setSelectedPhoto(uniquePhotos[clamped]);
-      return clamped;
-    });
-  }, [uniquePhotos]);
+  const handleNavigate = useCallback(
+    (dir: "prev" | "next") => {
+      setSelectedIndex((prev) => {
+        const next = dir === "prev" ? prev - 1 : prev + 1;
+        const clamped = Math.max(0, Math.min(uniquePhotos.length - 1, next));
+        setSelectedPhoto(uniquePhotos[clamped]);
+        return clamped;
+      });
+    },
+    [uniquePhotos]
+  );
+
+  // ── Keyboard shortcuts (Escape = clear selection, Ctrl+A = select all) ──
+  useEffect(() => {
+    if (!selectionHook) return;
+    const handler = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") selectionHook.clearAll();
+      if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+        e.preventDefault();
+        selectionHook.selectAll(uniquePhotos);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [selectionHook, uniquePhotos]);
+
+  // Empty state
+  if (!loading && uniquePhotos.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center p-12 glass border border-[var(--border)] rounded-3xl max-w-md mx-auto relative z-10">
+        <div className="h-12 w-12 bg-[var(--surface)] text-[var(--text2)] border border-[var(--border)] rounded-full flex items-center justify-center mb-4">
+          <ImageOff className="h-6 w-6" />
+        </div>
+        <h4 className="font-bold text-white text-sm">ไม่พบรูปภาพในขณะนี้</h4>
+        <p className="text-xs text-[var(--text2)] mt-1 max-w-xs leading-relaxed">
+          ยังไม่มีรูปภาพในระบบ หรือภาพถ่ายที่คุณกำลังมองหายังไม่ผ่านการประมวลผล
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 select-none">
-      {/* Column count selector */}
+      {/* Column selector UI */}
       {uniquePhotos.length > 0 && (
         <div className="flex items-center justify-end gap-2">
           <span className="text-[10px] text-[var(--text3)] font-semibold uppercase tracking-wider flex items-center gap-1">
@@ -126,9 +159,9 @@ export function PhotoGrid({ photos, loading, hasMore, onLoadMore }: PhotoGridPro
             {COLUMN_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
-                onClick={() => setColumns(opt.value)}
+                onClick={() => setCustomColumns(opt.value)}
                 className={`w-7 h-7 text-xs font-bold rounded-lg transition-all ${
-                  columns === opt.value
+                  colCount === opt.value
                     ? "bg-gradient-to-br from-[var(--accent-blue)] to-[var(--accent-purple)] text-white shadow-sm"
                     : "text-[var(--text2)] hover:text-white hover:bg-[var(--surface-hover)]"
                 }`}
@@ -140,37 +173,71 @@ export function PhotoGrid({ photos, loading, hasMore, onLoadMore }: PhotoGridPro
         </div>
       )}
 
-      {/* Masonry Grid */}
-      {uniquePhotos.length > 0 ? (
-        <div ref={gridRef} className={`${COLUMN_CLASS[columns]} gap-3`}>
-          {uniquePhotos.map((photo) => (
-            <PhotoCard
-              key={photo.id}
-              photo={photo}
-              onView={handleView}
-            />
-          ))}
-        </div>
-      ) : (
-        !loading && (
-          <div className="flex flex-col items-center justify-center text-center p-12 glass border border-[var(--border)] rounded-3xl max-w-md mx-auto relative z-10">
-            <div className="h-12 w-12 bg-[var(--surface)] text-[var(--text2)] border border-[var(--border)] rounded-full flex items-center justify-center mb-4">
-              <ImageOff className="h-6 w-6" />
-            </div>
-            <h4 className="font-bold text-white text-sm">ไม่พบรูปภาพในขณะนี้</h4>
-            <p className="text-xs text-[var(--text2)] mt-1 max-w-xs leading-relaxed">
-              ยังไม่มีรูปภาพในระบบ หรือภาพถ่ายที่คุณกำลังมองหายังไม่ผ่านการประมวลผล
-            </p>
+      {/* Virtual scroll container */}
+      <div ref={containerRef} className="w-full">
+        {uniquePhotos.length > 0 && (
+          <div
+            style={{ height: totalHeight, position: "relative" }}
+            aria-label="photo-grid"
+          >
+            {virtualRows.map((vRow) => (
+              <div
+                key={vRow.index}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: vRow.size,
+                  transform: `translateY(${vRow.start}px)`,
+                  display: "flex",
+                  gap: "12px",
+                }}
+              >
+                {vRow.photos.map((photo) =>
+                  cellWidth > 0 ? (
+                    <PhotoCard
+                      key={photo.id}
+                      photo={photo}
+                      onView={handleView}
+                      onSelect={selectionHook?.toggle}
+                      isSelected={selectionHook?.isSelected(photo.id)}
+                      cellWidth={cellWidth}
+                      cellHeight={cellHeight}
+                    />
+                  ) : (
+                    <PhotoSkeleton
+                      key={photo.id}
+                      width={cellWidth || 200}
+                      height={cellHeight}
+                    />
+                  )
+                )}
+                {/* Fill empty slots in last row */}
+                {vRow.photos.length < colCount &&
+                  Array.from({ length: colCount - vRow.photos.length }).map(
+                    (_, i) => (
+                      <div
+                        key={`empty-${i}`}
+                        style={{ width: cellWidth, height: cellHeight }}
+                      />
+                    )
+                  )}
+              </div>
+            ))}
           </div>
-        )
-      )}
+        )}
+      </div>
 
-      {/* Loading skeleton */}
-      {loading && <LoadingGrid count={8} />}
+      {/* Loading skeleton when loading initial batch */}
+      {loading && uniquePhotos.length === 0 && <LoadingGrid count={8} />}
 
-      {/* Infinite scroll trigger */}
+      {/* Infinite scroll trigger sentinel */}
       {hasMore && !loading && (
-        <div ref={observerRef} className="h-16 flex items-center justify-center pt-4">
+        <div
+          ref={sentinelRef}
+          className="h-16 flex items-center justify-center pt-4"
+        >
           <Loader2 className="h-6 w-6 text-[var(--accent-purple)] animate-spin" />
         </div>
       )}
@@ -178,7 +245,7 @@ export function PhotoGrid({ photos, loading, hasMore, onLoadMore }: PhotoGridPro
       {/* Photo viewer modal */}
       <PhotoModal
         photo={selectedPhoto}
-        photos={photos}
+        photos={uniquePhotos}
         currentIndex={selectedIndex}
         onClose={() => setSelectedPhoto(null)}
         onNavigate={handleNavigate}
