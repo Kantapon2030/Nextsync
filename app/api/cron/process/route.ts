@@ -1,7 +1,10 @@
+// app/api/cron/process/route.ts
+export const dynamic = "force-dynamic";
+
 import { createHash, timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
-import { db, processingJobs } from "@/lib/db";
-import { eq, sql } from "drizzle-orm";
+import { db, processingJobs, photos } from "@/lib/db";
+import { eq, sql, and } from "drizzle-orm";
 import { processPhotoBatch } from "@/lib/pipeline";
 
 export async function GET(req: Request) {
@@ -10,8 +13,6 @@ export async function GET(req: Request) {
     const cronSecret = process.env.CRON_SECRET;
 
     // Critical Guard: Ensure CRON_SECRET is configured.
-    // Without this guard, if CRON_SECRET is undefined, the check would validate
-    // against "Bearer undefined", allowing unauthorized requests that present this header.
     if (!cronSecret) {
       console.error("[CRON] Security Alert: CRON_SECRET is not configured in environmental variables.");
       return new Response("Internal Server Error", { status: 500 });
@@ -20,9 +21,6 @@ export async function GET(req: Request) {
     const authHeader = req.headers.get("Authorization") || "";
     const expectedHeader = `Bearer ${cronSecret}`;
 
-    // Timing-safe comparison using SHA-256 to prevent timing attacks.
-    // By hashing both values to a fixed-length (32 bytes), we prevent timingSafeEqual
-    // from throwing a RangeError due to mismatched lengths, and guarantee constant-time execution.
     const expectedHash = createHash("sha256").update(expectedHeader).digest();
     const actualHash = createHash("sha256").update(authHeader).digest();
 
@@ -31,6 +29,39 @@ export async function GET(req: Request) {
       const timestamp = new Date().toISOString();
       console.warn(`[CRON] [${timestamp}] Unauthorized process attempt from IP: ${ip}`);
       return new Response("Unauthorized", { status: 401 });
+    }
+
+    // ── Self-Healing: Reset jobs ที่ค้าง running > 10 นาที → queued ──
+    const stuckResetResult = await db
+      .update(processingJobs)
+      .set({ status: "queued", startedAt: null })
+      .where(
+        and(
+          eq(processingJobs.status, "running"),
+          sql`${processingJobs.startedAt} < NOW() - INTERVAL '10 minutes'`
+        )
+      );
+    console.log(`[CRON] Reset ${stuckResetResult.rowCount ?? 0} stuck jobs back to queued`);
+
+    // ── Auto-create missing jobs: photos pending แต่ไม่มี job ──
+    const eventsNeedingJobs = await db.execute(sql`
+      SELECT DISTINCT p.event_id
+      FROM photos p
+      LEFT JOIN processing_jobs pj 
+        ON p.event_id = pj.event_id 
+        AND pj.status IN ('queued', 'running')
+      WHERE p.status = 'pending'
+        AND pj.id IS NULL
+    `);
+
+    for (const row of eventsNeedingJobs.rows as { event_id: string }[]) {
+      await db.insert(processingJobs).values({
+        id: crypto.randomUUID(),
+        eventId: row.event_id,
+        status: "queued",
+        createdAt: new Date(),
+      });
+      console.log(`[CRON] Auto-created missing job for event ${row.event_id}`);
     }
 
     // 2. Find the oldest queued job

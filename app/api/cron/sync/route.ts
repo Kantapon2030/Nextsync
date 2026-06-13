@@ -1,6 +1,10 @@
+// app/api/cron/sync/route.ts
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
 import { createHash, timingSafeEqual } from "crypto";
 import { db, events, photos } from "@/lib/db";
-import { and, eq, isNotNull, inArray, sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { getNewFilesFromFolder } from "@/lib/drive";
 import { triggerQualityFilter } from "@/lib/pipeline";
 import { NextResponse } from "next/server";
@@ -11,8 +15,6 @@ export async function GET(req: Request) {
     const cronSecret = process.env.CRON_SECRET;
 
     // Critical Guard: Ensure CRON_SECRET is configured.
-    // Without this guard, if CRON_SECRET is undefined, the check would validate
-    // against "Bearer undefined", allowing unauthorized requests that present this header.
     if (!cronSecret) {
       console.error("[CRON] Security Alert: CRON_SECRET is not configured in environmental variables.");
       return new Response("Internal Server Error", { status: 500 });
@@ -21,9 +23,6 @@ export async function GET(req: Request) {
     const authHeader = req.headers.get("Authorization") || "";
     const expectedHeader = `Bearer ${cronSecret}`;
 
-    // Timing-safe comparison using SHA-256 to prevent timing attacks.
-    // By hashing both values to a fixed-length (32 bytes), we prevent timingSafeEqual
-    // from throwing a RangeError due to mismatched lengths, and guarantee constant-time execution.
     const expectedHash = createHash("sha256").update(expectedHeader).digest();
     const actualHash = createHash("sha256").update(authHeader).digest();
 
@@ -104,10 +103,12 @@ export async function GET(req: Request) {
           })
           .where(eq(events.id, event.id));
 
-        // Trigger the quality filter pipeline (async)
-        triggerQualityFilter(event.id).catch((err) => {
+        // Trigger the quality filter pipeline (awaited to prevent early environment shutdown on Vercel)
+        try {
+          await triggerQualityFilter(event.id);
+        } catch (err) {
           console.error(`[CRON] Quality filter trigger failed for event ${event.id}:`, err);
-        });
+        }
 
         results.push({ eventId: event.id, synced: toInsert.length });
       } catch (err) {

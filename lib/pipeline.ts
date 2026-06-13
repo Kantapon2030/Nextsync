@@ -2,88 +2,83 @@
 // Photo processing pipeline: download from Drive, generate thumbnails, approve,
 // and index faces via the ArcFace Python microservice.
 import { db, photos, photoFaceEmbeddings, processingJobs } from "@/lib/db";
-import { and, eq, isNull, sql, count } from "drizzle-orm";
+import { and, eq, sql, count } from "drizzle-orm";
 import { downloadFileBuffer } from "./drive";
 import { uploadToR2 } from "./r2";
 import { extractFaces } from "./faceApi";
 
 /**
  * Trigger processing job for an event (queues it if not already running).
+ * ใช้ Native SQL SELECT WHERE NOT EXISTS เพื่อป้องกัน race condition
  */
 export async function triggerProcessing(eventId: string): Promise<void> {
   try {
-    const existing = await db
-      .select()
-      .from(processingJobs)
-      .where(
-        and(
-          eq(processingJobs.eventId, eventId),
-          sql`${processingJobs.status} IN ('queued', 'running')`
-        )
+    const insertResult = await db.execute(sql`
+      INSERT INTO processing_jobs (id, event_id, status, created_at)
+      SELECT ${crypto.randomUUID()}, ${eventId}, 'queued', NOW()
+      WHERE NOT EXISTS (
+        SELECT 1 FROM processing_jobs 
+        WHERE event_id = ${eventId} 
+        AND status IN ('queued', 'running')
       )
-      .limit(1);
+    `);
 
-    if (existing.length > 0) {
-      console.log(`[PIPELINE] Job already exists for event ${eventId}, skipping queue`);
-      return;
-    }
+    const inserted = (insertResult.rowCount ?? 0) > 0;
 
-    await db.insert(processingJobs).values({
-      id: crypto.randomUUID(),
-      eventId,
-      status: "queued",
-      createdAt: new Date(),
-    });
-    console.log(`[PIPELINE] Queued processing job for event ${eventId}`);
+    if (inserted) {
+      console.log(`[PIPELINE] Queued processing job for event ${eventId}`);
 
-    // In local dev environments, run the processing job immediately in the background
-    if (process.env.VERCEL !== "1") {
-      (async () => {
-        console.log(`[PIPELINE] Local environment detected. Starting background processing loop for event ${eventId}...`);
-        try {
-          // Set job to running in DB
-          await db
-            .update(processingJobs)
-            .set({ status: "running", startedAt: new Date() })
-            .where(
-              and(
-                eq(processingJobs.eventId, eventId),
-                eq(processingJobs.status, "queued")
-              )
-            );
+      // In local dev environments, run the processing job immediately in the background
+      if (process.env.VERCEL !== "1") {
+        (async () => {
+          console.log(`[PIPELINE] Local environment detected. Starting background processing loop for event ${eventId}...`);
+          try {
+            // Set job to running in DB
+            await db
+              .update(processingJobs)
+              .set({ status: "running", startedAt: new Date() })
+              .where(
+                and(
+                  eq(processingJobs.eventId, eventId),
+                  eq(processingJobs.status, "queued")
+                )
+              );
 
-          let hasMore = true;
-          while (hasMore) {
-            const { processed, remaining } = await processPhotoBatch(eventId, 10);
-            console.log(`[PIPELINE] Processed ${processed} photos. Remaining: ${remaining}`);
-            hasMore = remaining > 0 && processed > 0;
+            let hasMore = true;
+            while (hasMore) {
+              const { processed, remaining } = await processPhotoBatch(eventId, 10);
+              console.log(`[PIPELINE] Processed ${processed} photos. Remaining: ${remaining}`);
+              hasMore = remaining > 0 && processed > 0;
+            }
+
+            // Set job to done in DB
+            await db
+              .update(processingJobs)
+              .set({ status: "done", doneAt: new Date() })
+              .where(
+                and(
+                  eq(processingJobs.eventId, eventId),
+                  eq(processingJobs.status, "running")
+                )
+              );
+            console.log(`[PIPELINE] Background processing loop finished for event ${eventId}.`);
+          } catch (err) {
+            console.error(`[PIPELINE] Error in local background processing loop:`, err);
+            // Set job to error
+            await db
+              .update(processingJobs)
+              .set({ status: "error", doneAt: new Date() })
+              .where(
+                and(
+                  eq(processingJobs.eventId, eventId),
+                  eq(processingJobs.status, "running")
+                )
+              );
           }
-
-          // Set job to done in DB
-          await db
-            .update(processingJobs)
-            .set({ status: "done", doneAt: new Date() })
-            .where(
-              and(
-                eq(processingJobs.eventId, eventId),
-                eq(processingJobs.status, "running")
-              )
-            );
-          console.log(`[PIPELINE] Background processing loop finished for event ${eventId}.`);
-        } catch (err) {
-          console.error(`[PIPELINE] Error in local background processing loop:`, err);
-          // Set job to error
-          await db
-            .update(processingJobs)
-            .set({ status: "error", doneAt: new Date() })
-            .where(
-              and(
-                eq(processingJobs.eventId, eventId),
-                eq(processingJobs.status, "running")
-              )
-            );
-        }
-      })();
+        })();
+      }
+    } else {
+      console.log(`[PIPELINE] Job already exists for event ${eventId}, skipping queue`);
     }
   } catch (err) {
     console.error("[PIPELINE] Failed to trigger processing:", err);
@@ -94,6 +89,22 @@ export async function triggerProcessing(eventId: string): Promise<void> {
  * @deprecated Use triggerProcessing instead.
  */
 export const triggerQualityFilter = triggerProcessing;
+
+// Warmup HF Space ก่อนเริ่ม batch เพื่อหลีกเลี่ยง cold start timeout
+async function warmupFaceApi(): Promise<void> {
+  try {
+    const FACE_API_URL = process.env.FACE_API_URL ?? "https://kantapon020-shotsync-face-api.hf.space";
+    const res = await fetch(`${FACE_API_URL}/health`, {
+      method: "GET",
+      signal: AbortSignal.timeout(8000), // 8 วินาที
+    });
+    if (res.ok) {
+      console.log("[PIPELINE] HF Space warmed up successfully");
+    }
+  } catch {
+    console.warn("[PIPELINE] HF Space warmup failed — proceeding anyway");
+  }
+}
 
 /**
  * Process a batch of pending photos:
@@ -106,7 +117,10 @@ export async function processPhotoBatch(
   eventId: string,
   batchSize: number
 ): Promise<{ processed: number; remaining: number }> {
-  // Fetch pending photos (no blurScore filter needed anymore)
+  // Warmup ก่อนประมวลผลรูปเสมอเพื่อลด cold start timeout
+  await warmupFaceApi();
+
+  // Fetch pending photos
   const pending = await db
     .select()
     .from(photos)
@@ -120,8 +134,8 @@ export async function processPhotoBatch(
 
   let processed = 0;
 
-  // Process in chunks of 15 concurrently to maximize network and CPU utilization
-  const chunkSize = 15;
+  // Process in chunks of 2 concurrently to prevent timeout and HF Space overload
+  const chunkSize = 2;
   for (let i = 0; i < pending.length; i += chunkSize) {
     const chunk = pending.slice(i, i + chunkSize);
     await Promise.all(
@@ -173,16 +187,21 @@ export async function processPhotoBatch(
           const thumbnailUrl = await uploadToR2(key800, thumb800, "image/jpeg");
           const thumbnailSm = await uploadToR2(key400, thumb400, "image/jpeg");
 
-          // 3. Extract faces via ArcFace Python microservice (512-dim)
+          // 3. Extract faces via ArcFace Python microservice (512-dim) with 8s timeout
           let faces: Array<{ embedding: number[]; bbox: { x: number; y: number; w: number; h: number }; confidence: number }> = [];
           try {
-            const result = await extractFaces(buffer, photo.filename);
+            const result = await Promise.race([
+              extractFaces(buffer, photo.filename),
+              new Promise<{ faces: any[] }>((_, reject) =>
+                setTimeout(() => reject(new Error("Face extraction timeout")), 8000)
+              ),
+            ]);
             faces = result.faces;
           } catch (faceErr) {
-            console.warn(`[PIPELINE] ArcFace extraction failed for ${photo.id}, continuing without embeddings:`, faceErr);
+            console.warn(`[PIPELINE] Face extraction failed/timeout for ${photo.id}, continuing without embeddings:`, faceErr);
           }
 
-          // 4. Mark as APPROVED (no quality rejection)
+          // 4. Mark as APPROVED
           await db
             .update(photos)
             .set({
@@ -203,7 +222,7 @@ export async function processPhotoBatch(
               faces.map((face, index: number) => ({
                 id: crypto.randomUUID(),
                 photoId: photo.id,
-                embedding: face.embedding,     // number[512]
+                embedding: face.embedding,
                 faceIndex: index,
                 bboxX: face.bbox?.x ?? null,
                 bboxY: face.bbox?.y ?? null,
