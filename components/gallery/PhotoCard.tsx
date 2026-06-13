@@ -1,7 +1,7 @@
 // components/gallery/PhotoCard.tsx
 "use client";
 
-import { useState, memo, useCallback } from "react";
+import { useState, memo, useCallback, useRef } from "react";
 import { Download, Eye, Check } from "lucide-react";
 
 export interface PhotoData {
@@ -51,6 +51,47 @@ export const PhotoCard = memo(function PhotoCard({
   const [src, setSrc] = useState(lowSrc);
   const [loaded, setLoaded] = useState(false);
 
+  // Long-press detection for mobile selection
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const isLongPressRef = useRef(false);
+
+  const handleTouchStart = useCallback(() => {
+    if (!onSelect) return;
+    isLongPressRef.current = false;
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+
+    longPressTimer.current = setTimeout(() => {
+      onSelect(photo); // Toggle selection mode
+      isLongPressRef.current = true;
+      if (typeof window !== "undefined" && navigator.vibrate) {
+        try {
+          navigator.vibrate(50); // haptic feedback
+        } catch (e) {
+          // ignore vibration errors
+        }
+      }
+    }, 500);
+  }, [onSelect, photo]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+    if (isLongPressRef.current) {
+      // Prevent normal click from firing after long-press selection
+      e.preventDefault();
+    }
+  }, []);
+
+  const handleTouchMove = useCallback(() => {
+    // Cancel long press if user scrolls or moves finger
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }, []);
+
   const handleLoad = useCallback(() => {
     setLoaded(true);
     // Upgrade to high-res after low-res loads
@@ -91,6 +132,10 @@ export const PhotoCard = memo(function PhotoCard({
   return (
     <div
       onClick={() => onView(photo)}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      onTouchMove={handleTouchMove}
+      onTouchCancel={handleTouchEnd}
       style={containerStyle}
       className={`group relative bg-[var(--surface)] border rounded-2xl overflow-hidden cursor-pointer transition-all duration-300 shadow-lg ${
         isVirtual ? "" : "break-inside-avoid mb-3 hover:scale-[1.01]"
@@ -100,24 +145,29 @@ export const PhotoCard = memo(function PhotoCard({
           : "border-[var(--border)] hover:border-[var(--border-hover)]"
       }`}
     >
-      {/* Selection Checkbox — top-left */}
+      {/* Selection Checkbox — top-left (Expanded touch area >= 44x44px) */}
       {onSelect && (
         <button
           onClick={handleSelectClick}
           aria-label={isSelected ? "ยกเลิกการเลือก" : "เลือกรูปนี้"}
-          className={`absolute top-2 left-2 z-30 w-6 h-6 rounded-full flex items-center justify-center border-2 transition-all duration-200 ${
-            isSelected
-              ? "bg-[var(--accent-blue)] border-[var(--accent-blue)] opacity-100 scale-100"
-              : "bg-black/50 border-white/50 opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100"
-          } backdrop-blur-sm`}
+          className="absolute top-0 left-0 z-30 w-12 h-12 flex items-center justify-center cursor-pointer touch-manipulation"
         >
-          {isSelected && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
+          <div
+            className={`w-6 h-6 rounded-full flex items-center justify-center border-2 transition-all duration-200 ${
+              isSelected
+                ? "bg-[var(--accent-blue)] border-[var(--accent-blue)] opacity-100 scale-100"
+                : "bg-black/50 border-white/50 opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100"
+            } backdrop-blur-sm`}
+          >
+            {isSelected && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
+          </div>
         </button>
       )}
 
       {/* Image container */}
       <div
-        className={`relative w-full bg-black/40 overflow-hidden ${isVirtual ? "h-full" : ""}`}
+        className="relative w-full overflow-hidden"
+        style={isVirtual ? { height: cellHeight } : {}}
       >
         {/* Skeleton shimmer placeholder */}
         {!loaded && (
@@ -143,9 +193,16 @@ export const PhotoCard = memo(function PhotoCard({
           alt={photo.filename}
           loading="lazy"
           decoding="async"
-          className={`w-full transition-all duration-700 group-hover:scale-[1.04] ${
-            isVirtual ? "h-full object-cover" : "h-auto object-cover"
-          } ${loaded ? "opacity-100 blur-0" : "opacity-0 blur-sm absolute inset-0"}`}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+            objectPosition: "center",
+            backgroundColor: "rgba(0,0,0,0.15)", // subtle bg สำหรับพื้นที่ว่างของรูป
+          }}
+          className={`transition-all duration-700 group-hover:scale-[1.02] ${
+            loaded ? "opacity-100 blur-0" : "opacity-0 blur-sm absolute inset-0"
+          }`}
           onLoad={handleLoad}
           onError={handleError}
         />
@@ -162,22 +219,23 @@ export const PhotoCard = memo(function PhotoCard({
         {/* Hover overlay */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-3 z-20">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] font-semibold text-white/90 truncate max-w-[70%]">
+            <p className="text-[10px] font-semibold text-white/90 truncate max-w-[50%]">
               {photo.filename}
             </p>
-            <div className="flex items-center gap-1.5">
+            {/* Expanded touch target actions (>= 44x44px) */}
+            <div className="flex items-center gap-2">
               <a
                 href={`/api/photos/download?id=${photo.id}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()}
-                className="p-1.5 bg-white/15 hover:bg-white/25 text-white rounded-lg backdrop-blur-sm transition-colors border border-white/10"
+                className="w-11 h-11 flex items-center justify-center bg-white/15 hover:bg-white/25 text-white rounded-xl backdrop-blur-sm transition-colors border border-white/10"
                 title="ดาวน์โหลด"
               >
-                <Download className="h-3.5 w-3.5" />
+                <Download className="h-4 w-4" />
               </a>
-              <span className="p-1.5 bg-white/15 text-white rounded-lg border border-white/10">
-                <Eye className="h-3.5 w-3.5" />
+              <span className="w-11 h-11 flex items-center justify-center bg-white/15 text-white rounded-xl border border-white/10">
+                <Eye className="h-4 w-4" />
               </span>
             </div>
           </div>

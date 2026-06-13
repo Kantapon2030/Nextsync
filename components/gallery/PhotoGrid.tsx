@@ -8,7 +8,6 @@ import {
   useCallback,
   useLayoutEffect,
   useMemo,
-  type KeyboardEvent,
 } from "react";
 import { PhotoCard, type PhotoData } from "./PhotoCard";
 import { PhotoModal } from "./PhotoModal";
@@ -61,24 +60,11 @@ export function PhotoGrid({
   );
 
   // Virtual scroll
-  const { virtualRows, totalHeight, colCount } = usePhotoVirtualizer(
+  const { virtualRows, totalHeight, colCount, cellWidth, gap } = usePhotoVirtualizer(
     uniquePhotos,
     containerRef,
     customColumns
   );
-
-  // Cell dimensions from virtualizer row
-  const cellWidth = useMemo(() => {
-    if (!containerRef.current || colCount === 0) return 0;
-    const gap = 12; // gap-3 = 12px
-    return Math.floor(
-      (containerRef.current.clientWidth - gap * (colCount - 1)) / colCount
-    );
-  }, [colCount]);
-
-  const cellHeight = useMemo(() => {
-    return cellWidth > 0 ? Math.round(cellWidth * 1.4) : 300;
-  }, [cellWidth]);
 
   // ── Infinite scroll sentinel ──────────────────────────────────────
   useEffect(() => {
@@ -174,7 +160,7 @@ export function PhotoGrid({
       )}
 
       {/* Virtual scroll container */}
-      <div ref={containerRef} className="w-full">
+      <div ref={containerRef} className="w-full px-2 sm:px-0">
         {uniquePhotos.length > 0 && (
           <div
             style={{ height: totalHeight, position: "relative" }}
@@ -191,7 +177,7 @@ export function PhotoGrid({
                   height: vRow.size,
                   transform: `translateY(${vRow.start}px)`,
                   display: "flex",
-                  gap: "12px",
+                  gap: `${gap}px`,
                 }}
               >
                 {vRow.photos.map((photo) =>
@@ -203,13 +189,13 @@ export function PhotoGrid({
                       onSelect={selectionHook?.toggle}
                       isSelected={selectionHook?.isSelected(photo.id)}
                       cellWidth={cellWidth}
-                      cellHeight={cellHeight}
+                      cellHeight={vRow.rowHeight}
                     />
                   ) : (
                     <PhotoSkeleton
                       key={photo.id}
                       width={cellWidth || 200}
-                      height={cellHeight}
+                      height={vRow.rowHeight}
                     />
                   )
                 )}
@@ -219,7 +205,7 @@ export function PhotoGrid({
                     (_, i) => (
                       <div
                         key={`empty-${i}`}
-                        style={{ width: cellWidth, height: cellHeight }}
+                        style={{ width: cellWidth, height: vRow.rowHeight }}
                       />
                     )
                   )}
