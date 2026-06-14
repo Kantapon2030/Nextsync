@@ -2,15 +2,15 @@
   "crons": [
     {
       "path": "/api/cron/sync",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 0 * * *"
     },
     {
       "path": "/api/cron/process",
-      "schedule": "*/2 * * * *"
+      "schedule": "0 1 * * *"
     },
     {
       "path": "/api/cron/ping-hf",
-      "schedule": "*/25 * * * *"
+      "schedule": "0 2 * * *"
     }
   ]
 }
