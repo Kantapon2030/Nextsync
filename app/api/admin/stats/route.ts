@@ -5,6 +5,8 @@ import { db, users, photos, photoFaceEmbeddings, processingJobs } from "@/lib/db
 import { eq, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
     const session = await auth();

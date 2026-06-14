@@ -6,6 +6,9 @@ import { db, filterConfig } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { invalidateSettingsCache } from "@/lib/aiTuner";
+
+export const dynamic = "force-dynamic";
 
 const pipelineSchema = z.object({
   qualityBlurThreshold: z.number().min(50).max(200).optional(),
@@ -24,6 +27,19 @@ const PIPELINE_DEFAULTS = {
   thumbnailSizeLg: 800,
   thumbnailSizeSm: 400,
 };
+
+type FilterConfigInsert = typeof filterConfig.$inferInsert;
+
+function toPipeline(row: typeof filterConfig.$inferSelect) {
+  return {
+    qualityBlurThreshold: row.blurMin ?? PIPELINE_DEFAULTS.qualityBlurThreshold,
+    qualityBrightnessMin: Math.round((row.brightnessMin ?? 0.12) * 255),
+    qualityBrightnessMax: Math.round((row.brightnessMax ?? 0.94) * 255),
+    pipelineBatchSize: row.pipelineBatchSize ?? PIPELINE_DEFAULTS.pipelineBatchSize,
+    thumbnailSizeLg: row.thumbnailSizeLg ?? PIPELINE_DEFAULTS.thumbnailSizeLg,
+    thumbnailSizeSm: row.thumbnailSizeSm ?? PIPELINE_DEFAULTS.thumbnailSizeSm,
+  };
+}
 
 async function ensureConfigRow() {
   const existing = await db
@@ -60,15 +76,7 @@ export async function GET() {
 
     return NextResponse.json({
       success: true,
-      pipeline: {
-        qualityBlurThreshold: row.blurMin ?? PIPELINE_DEFAULTS.qualityBlurThreshold,
-        // brightnessMin/Max stored as 0-1 floats in DB, convert to 0-255 for UI
-        qualityBrightnessMin: Math.round((row.brightnessMin ?? 0.12) * 255),
-        qualityBrightnessMax: Math.round((row.brightnessMax ?? 0.94) * 255),
-        pipelineBatchSize: (row as any).pipelineBatchSize ?? PIPELINE_DEFAULTS.pipelineBatchSize,
-        thumbnailSizeLg: (row as any).thumbnailSizeLg ?? PIPELINE_DEFAULTS.thumbnailSizeLg,
-        thumbnailSizeSm: (row as any).thumbnailSizeSm ?? PIPELINE_DEFAULTS.thumbnailSizeSm,
-      },
+      pipeline: toPipeline(row),
     });
   } catch (error) {
     console.error("GET pipeline settings error:", error);
@@ -88,7 +96,10 @@ export async function PATCH(req: Request) {
 
     await ensureConfigRow();
 
-    const updateFields: Record<string, any> = { updatedAt: new Date() };
+    const updateFields: Partial<FilterConfigInsert> = {
+      updatedAt: new Date(),
+      updatedBy: session.user.id,
+    };
     if (body.qualityBlurThreshold !== undefined) updateFields.blurMin = body.qualityBlurThreshold;
     // Convert 0-255 UI values back to 0-1 range for DB
     if (body.qualityBrightnessMin !== undefined) updateFields.brightnessMin = body.qualityBrightnessMin / 255;
@@ -103,16 +114,11 @@ export async function PATCH(req: Request) {
       .where(eq(filterConfig.id, 1))
       .returning();
 
+    invalidateSettingsCache();
+
     return NextResponse.json({
       success: true,
-      pipeline: {
-        qualityBlurThreshold: updated.blurMin ?? PIPELINE_DEFAULTS.qualityBlurThreshold,
-        qualityBrightnessMin: Math.round((updated.brightnessMin ?? 0.12) * 255),
-        qualityBrightnessMax: Math.round((updated.brightnessMax ?? 0.94) * 255),
-        pipelineBatchSize: (updated as any).pipelineBatchSize ?? PIPELINE_DEFAULTS.pipelineBatchSize,
-        thumbnailSizeLg: (updated as any).thumbnailSizeLg ?? PIPELINE_DEFAULTS.thumbnailSizeLg,
-        thumbnailSizeSm: (updated as any).thumbnailSizeSm ?? PIPELINE_DEFAULTS.thumbnailSizeSm,
-      },
+      pipeline: toPipeline(updated),
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

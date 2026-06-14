@@ -2,23 +2,26 @@
 // Uses the user's enrolled ArcFace 512-dim embedding to search for matching photos
 // via pgvector cosine distance (<=>).
 import { auth } from "@/lib/auth";
-import { db, userFaceEmbeddings, filterConfig } from "@/lib/db";
+import { db, userFaceEmbeddings } from "@/lib/db";
 import { eq, sql, SQL } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { getSettingsFromDB } from "@/lib/aiTuner";
 
 // ArcFace cosine distance threshold:
 //   0.0 = identical, 1.0 = opposite
 //   Cross-scenario (makeup vs natural): 0.45–0.48 recommended
 // Loaded from DB filterConfig.faceSimilarityDist (admin-adjustable 0.40–0.55)
-const DEFAULT_THRESHOLD = 0.45;
-
 const searchSchema = z.object({
-  limit: z.number().int().positive().optional().default(200),
+  limit: z.number().int().positive().max(200).optional(),
   seasonId: z.string().optional(),
   eventId: z.string().optional(),
   timeslot: z.string().optional(),
 });
+
+interface SearchRow extends Record<string, unknown> {
+  distance: number | null;
+}
 
 export async function POST(req: Request) {
   try {
@@ -41,6 +44,8 @@ export async function POST(req: Request) {
     // Parse optional filter params from body
     const body = await req.json().catch(() => ({}));
     const { limit, seasonId, eventId, timeslot } = searchSchema.parse(body);
+    const settings = await getSettingsFromDB();
+    const resultLimit = Math.min(limit ?? settings.maxResults, settings.maxResults);
 
     // Load user's enrolled ArcFace embedding
     const userEmb = await db
@@ -62,13 +67,7 @@ export async function POST(req: Request) {
     const queryVector = userEmb[0].embedding; // number[512]
     const queryVectorStr = `[${queryVector.join(",")}]`;
 
-    // Load threshold from DB config (admin-adjustable), fallback to default
-    const config = await db
-      .select({ faceSimilarityDist: filterConfig.faceSimilarityDist })
-      .from(filterConfig)
-      .where(eq(filterConfig.id, 1))
-      .limit(1);
-    const threshold = config[0]?.faceSimilarityDist ?? DEFAULT_THRESHOLD;
+    const threshold = settings.cosineThreshold;
 
     // Build optional filter conditions using parameterized sql fragments (no raw strings)
     const conditions: SQL[] = [sql`p.status = 'approved'`];
@@ -90,6 +89,9 @@ export async function POST(req: Request) {
     // pgvector cosine distance search (<=>) operator
     // DISTINCT ON photo to avoid returning same photo multiple times (multi-face photos)
     const query = sql`
+      WITH runtime_settings AS (
+        SELECT set_config('hnsw.ef_search', ${String(settings.efSearch)}, true)
+      )
       SELECT DISTINCT ON (p.id)
         p.id AS "id",
         p.event_id AS "eventId",
@@ -108,21 +110,22 @@ export async function POST(req: Request) {
         (pfe.embedding <=> ${queryVectorStr}::vector) AS "distance",
         (1 - (pfe.embedding <=> ${queryVectorStr}::vector)) AS "score"
       FROM photo_face_embeddings pfe
+      CROSS JOIN runtime_settings
       JOIN photos p ON p.id = pfe.photo_id
       JOIN events e ON e.id = p.event_id AND e.is_active = true
       WHERE
         ${whereClause}
         AND (pfe.embedding <=> ${queryVectorStr}::vector) < ${threshold}
       ORDER BY p.id, (pfe.embedding <=> ${queryVectorStr}::vector) ASC
-      LIMIT ${limit}
+      LIMIT ${resultLimit}
     `;
 
     const results = await db.execute(query);
-    const rows = results.rows ?? [];
+    const rows = (results.rows ?? []) as SearchRow[];
 
     // Sort final results by best distance
     const sorted = [...rows].sort(
-      (a: any, b: any) => (a.distance ?? 1) - (b.distance ?? 1)
+      (a, b) => (a.distance ?? 1) - (b.distance ?? 1)
     );
 
     return NextResponse.json({
@@ -131,13 +134,14 @@ export async function POST(req: Request) {
       count: sorted.length,
       threshold,
     });
-  } catch (error: any) {
-    if (error?.name === "ZodError" || error instanceof z.ZodError) {
+  } catch (error: unknown) {
+    if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.errors[0].message }, { status: 400 });
     }
     console.error("Face search API error:", error);
+    const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: `เกิดข้อผิดพลาดในการค้นหาใบหน้า: ${error?.message || error}` },
+      { error: `เกิดข้อผิดพลาดในการค้นหาใบหน้า: ${message}` },
       { status: 500 }
     );
   }

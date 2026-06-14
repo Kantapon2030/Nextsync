@@ -3,6 +3,12 @@
 import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Connection failed";
+}
+
 export async function GET() {
   try {
     const session = await auth();
@@ -26,7 +32,7 @@ export async function GET() {
       // Abort if no response within 5 seconds
       const timeout = setTimeout(() => controller.abort(), 5000);
 
-      const res = await fetch(`${faceApiUrl}/`, {
+      const res = await fetch(`${faceApiUrl}/health`, {
         signal: controller.signal,
         headers: {
           Authorization: `Bearer ${process.env.FACE_API_SECRET || ""}`,
@@ -44,13 +50,13 @@ export async function GET() {
         httpStatus: res.status,
         serviceInfo: json,
       });
-    } catch (fetchError: any) {
+    } catch (fetchError: unknown) {
       const responseTime = Date.now() - startTime;
-      const isTimeout = fetchError?.name === "AbortError";
+      const isTimeout = fetchError instanceof Error && fetchError.name === "AbortError";
       return NextResponse.json({
         success: false,
         status: "offline",
-        error: isTimeout ? "Request timed out after 5 seconds" : (fetchError?.message || "Connection failed"),
+        error: isTimeout ? "Request timed out after 5 seconds" : getErrorMessage(fetchError),
         responseTime: isTimeout ? responseTime : null,
       });
     }

@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 import { db, processingJobs, photos } from "@/lib/db";
 import { eq, sql, and } from "drizzle-orm";
 import { processPhotoBatch } from "@/lib/pipeline";
+import { getSettingsFromDB } from "@/lib/aiTuner";
 
 export async function GET(req: Request) {
   try {
@@ -85,9 +86,11 @@ export async function GET(req: Request) {
       .where(eq(processingJobs.id, currentJob.id));
 
     try {
-      // Process 5 photos per batch run to stay well within serverless timeouts
-      const BATCH_SIZE = 5;
-      const { processed, remaining } = await processPhotoBatch(currentJob.eventId, BATCH_SIZE);
+      const settings = await getSettingsFromDB();
+      const { processed, remaining } = await processPhotoBatch(
+        currentJob.eventId,
+        settings.pipelineBatchSize
+      );
 
       if (remaining === 0) {
         // Job is fully complete

@@ -6,6 +6,13 @@ import { and, eq, sql, count } from "drizzle-orm";
 import { downloadFileBuffer } from "./drive";
 import { uploadToR2 } from "./r2";
 import { extractFaces } from "./faceApi";
+import { getSettingsFromDB } from "./aiTuner";
+
+interface ExtractedFace {
+  embedding: number[];
+  bbox: { x: number; y: number; w: number; h: number };
+  confidence: number;
+}
 
 /**
  * Trigger processing job for an event (queues it if not already running).
@@ -117,6 +124,7 @@ export async function processPhotoBatch(
   eventId: string,
   batchSize: number
 ): Promise<{ processed: number; remaining: number }> {
+  const settings = await getSettingsFromDB();
   // Warmup ก่อนประมวลผลรูปเสมอเพื่อลด cold start timeout
   await warmupFaceApi();
 
@@ -174,11 +182,11 @@ export async function processPhotoBatch(
           const imgHeight = meta.height || null;
 
           const thumb800 = await sharp(buffer)
-            .resize(800, null, { withoutEnlargement: true })
+            .resize(settings.thumbnailSizeLg, null, { withoutEnlargement: true })
             .jpeg({ quality: 82 })
             .toBuffer();
           const thumb400 = await sharp(buffer)
-            .resize(400, null, { withoutEnlargement: true })
+            .resize(settings.thumbnailSizeSm, null, { withoutEnlargement: true })
             .jpeg({ quality: 75 })
             .toBuffer();
 
@@ -188,15 +196,17 @@ export async function processPhotoBatch(
           const thumbnailSm = await uploadToR2(key400, thumb400, "image/jpeg");
 
           // 3. Extract faces via ArcFace Python microservice (512-dim) with 8s timeout
-          let faces: Array<{ embedding: number[]; bbox: { x: number; y: number; w: number; h: number }; confidence: number }> = [];
+          let faces: ExtractedFace[] = [];
           try {
             const result = await Promise.race([
               extractFaces(buffer, photo.filename),
-              new Promise<{ faces: any[] }>((_, reject) =>
+              new Promise<{ faces: ExtractedFace[] }>((_, reject) =>
                 setTimeout(() => reject(new Error("Face extraction timeout")), 8000)
               ),
             ]);
-            faces = result.faces;
+            faces = result.faces.filter(
+              (face) => face.confidence >= settings.minFaceConfidence
+            );
           } catch (faceErr) {
             console.warn(`[PIPELINE] Face extraction failed/timeout for ${photo.id}, continuing without embeddings:`, faceErr);
           }

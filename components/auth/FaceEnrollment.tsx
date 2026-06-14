@@ -1,25 +1,21 @@
 // components/auth/FaceEnrollment.tsx
-// 3-angle face capture UI using camera capture with automatic countdown capture option.
+// Single front-facing capture UI using camera capture with automatic countdown.
 // Sends images directly to /api/face/enroll which delegates to Python ArcFace service.
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { CheckCircle2, AlertCircle, RefreshCw, Camera, Sparkles } from "lucide-react";
 
-type Angle = "ตรง" | "ซ้าย" | "ขวา";
+type Angle = "ตรง";
 
-const ANGLES: Angle[] = ["ตรง", "ซ้าย", "ขวา"];
+const ANGLES: Angle[] = ["ตรง"];
 
 const ANGLE_HINT: Record<Angle, string> = {
   ตรง: "มองตรงเข้าหากล้อง รักษาระยะห่าง 40–60 ซม. 😐",
-  ซ้าย: "หันหน้าเล็กน้อยไปทางซ้าย (~30°) 👉",
-  ขวา: "หันหน้าเล็กน้อยไปทางขวา (~30°) 👈",
 };
 
 const ANGLE_COLOR: Record<Angle, string> = {
   ตรง: "var(--accent-blue)",
-  ซ้าย: "var(--accent-yellow)",
-  ขวา: "var(--accent-green)",
 };
 
 interface FaceEnrollmentProps {
@@ -31,7 +27,7 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const [step, setStep] = useState(0); // 0=ตรง, 1=ซ้าย, 2=ขวา, 3=done
+  const [step, setStep] = useState(0); // 0=front, 1=done
   const [captures, setCaptures] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -124,8 +120,8 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
       }
 
       onComplete();
-    } catch (err: any) {
-      setError(err.message ?? "เกิดข้อผิดพลาด กรุณาลองใหม่");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "เกิดข้อผิดพลาด กรุณาลองใหม่");
       setUploading(false);
     }
   }, [captures, onComplete]);
@@ -230,41 +226,25 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
           />
         )}
 
-        {/* When all done, show last captured preview */}
-        {done && previews[2] && (
+        {/* When done, show the captured front-facing preview */}
+        {done && previews[0] && (
           <img
-            src={previews[2]}
+            src={previews[0]}
             alt="Captured"
             className="absolute inset-0 w-full h-full object-cover"
           />
         )}
 
-        {/* Face guide oval with rotational helper animations */}
+        {/* Face guide */}
         {!done && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div
               className="relative w-[160px] h-[210px] rounded-[50%] border-2 border-dashed transition-all duration-500 flex items-center justify-center"
               style={{
                 borderColor: `${accentColor}80`,
-                transform:
-                  currentAngle === "ซ้าย"
-                    ? "translateX(30px) rotate(10deg)"
-                    : currentAngle === "ขวา"
-                    ? "translateX(-30px) rotate(-10deg)"
-                    : "none",
+                transform: "none",
               }}
-            >
-              {currentAngle === "ซ้าย" && (
-                <div className="absolute -right-12 bg-black/75 text-white border border-slate-700 px-2 py-1 rounded text-[10px] font-bold animate-bounce shadow">
-                  หันซ้าย →
-                </div>
-              )}
-              {currentAngle === "ขวา" && (
-                <div className="absolute -left-12 bg-black/75 text-white border border-slate-700 px-2 py-1 rounded text-[10px] font-bold animate-bounce shadow">
-                  ← หันขวา
-                </div>
-              )}
-            </div>
+            />
           </div>
         )}
 
@@ -287,7 +267,7 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
             style={{ color: done ? "var(--accent-green)" : accentColor }}
           >
             {done
-              ? "✓ บันทึกครบทุกมุมแล้ว กำลังดำเนินการ..."
+              ? "✓ ถ่ายหน้าตรงแล้ว กำลังดำเนินการ..."
               : camReady
               ? ANGLE_HINT[currentAngle]
               : "กำลังเปิดกล้อง..."}
@@ -311,7 +291,7 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
             สแกนอัตโนมัติ (Auto Scan)
           </span>
           <span className="text-[10px] text-[var(--text3)]">
-            ระบบจะนับถอยหลังและสแกนใบหน้าทุกมุมให้โดยไม่ต้องกดปุ่ม
+            ระบบจะนับถอยหลังและถ่ายภาพหน้าตรงให้โดยไม่ต้องกดปุ่ม
           </span>
         </div>
         <button
@@ -386,7 +366,7 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
             <span>
               {autoScan 
                 ? `กำลังสแกนหน้า${currentAngle}อัตโนมัติ...`
-                : `📸 ถ่ายหน้า${currentAngle} (${step + 1}/3)`
+                : `ถ่ายหน้า${currentAngle}`
               }
             </span>
           </button>
@@ -428,7 +408,7 @@ export function FaceEnrollment({ onComplete }: FaceEnrollmentProps) {
 
       {/* Tip */}
       <p className="text-[10px] text-[var(--text3)] text-center leading-relaxed max-w-xs">
-        💡 ถ่าย 3 มุมเพื่อความแม่นยำสูงสุด · แต่งหน้าเหมือนวันงานเพื่อผลลัพธ์ที่ดีกว่า
+        ถ่ายหน้าตรงในที่สว่าง และมองกล้องให้ชัดเจน
       </p>
     </div>
   );

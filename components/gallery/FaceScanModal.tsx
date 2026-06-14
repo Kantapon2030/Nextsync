@@ -1,7 +1,7 @@
 // components/gallery/FaceScanModal.tsx
 // Face scan modal for gallery — upgraded with SOTA client-side auto-capture:
 //   "search": captures 1 face image automatically when centered
-//   "enroll": captures 3 face angles (มองตรง, หันซ้าย, หันขวา) automatically with screen flash & rainbow guides
+//   "enroll": captures one centered, front-facing image automatically
 // Features:
 //   ✅ Canvas AR overlay with bounding box + 68 landmark points
 //   ✅ Tab switch: Camera / Upload Photo
@@ -18,7 +18,7 @@ import { loadModels } from "@/lib/face";
 import * as faceapi from "face-api.js";
 
 type Angle = "ตรง" | "ซ้าย" | "ขวา";
-const ANGLES: Angle[] = ["ตรง", "ซ้าย", "ขวา"];
+const ANGLES: Angle[] = ["ตรง"];
 const ANGLE_HINT: Record<Angle, string> = {
   ตรง: "มองตรงเข้าหากล้อง 😐",
   ซ้าย: "หันหน้าเล็กน้อยไปทางซ้าย 👉",
@@ -54,7 +54,7 @@ interface FaceScanModalProps {
   isOpen: boolean;
   onClose: () => void;
   mode: "search" | "enroll";
-  onSearchResults?: (photos: any[]) => void;
+  onSearchResults?: (photos: Record<string, unknown>[]) => void;
   onEnrollSuccess?: () => void;
   seasonId?: string | null;
   eventId?: string | null;
@@ -97,7 +97,7 @@ export function FaceScanModal({
   const [faceAngle, setFaceAngle] = useState<"ตรง" | "ซ้าย" | "ขวา" | "unknown">("unknown");
   const [flashActive, setFlashActive] = useState(false);
 
-  // For enroll mode: 3-angle capture
+  // For enroll mode: one front-facing capture
   const [step, setStep] = useState(0);
   const [captures, setCaptures] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
@@ -119,6 +119,9 @@ export function FaceScanModal({
   const uploadImgRef = useRef<HTMLImageElement>(null);
   const uploadCanvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const getErrorMessage = (error: unknown, fallback: string) =>
+    error instanceof Error ? error.message : fallback;
 
   // Sync step ref for animation frame closure
   useEffect(() => {
@@ -398,8 +401,8 @@ export function FaceScanModal({
       await update({ faceEnrolled: true });
       onEnrollSuccess?.();
       handleClose();
-    } catch (err: any) {
-      setErrorMsg(err.message ?? "เกิดข้อผิดพลาดในการส่งข้อมูล");
+    } catch (err: unknown) {
+      setErrorMsg(getErrorMessage(err, "เกิดข้อผิดพลาดในการส่งข้อมูล"));
     } finally {
       setProcessing(false);
     }
@@ -419,8 +422,8 @@ export function FaceScanModal({
     if (mode === "enroll") {
       setCaptures((prev) => {
         const next = [...prev, file];
-        if (next.length === 3) {
-          // Auto submit when all 3 angles captured
+        if (next.length === ANGLES.length) {
+          // Auto submit after the single front-facing capture
           setTimeout(() => {
             handleEnrollSubmitWithFiles(next);
           }, 800);
@@ -625,8 +628,8 @@ export function FaceScanModal({
 
       onSearchResults?.(data.photos ?? []);
       handleClose();
-    } catch (err: any) {
-      setErrorMsg(err.message ?? "เกิดข้อผิดพลาด");
+    } catch (err: unknown) {
+      setErrorMsg(getErrorMessage(err, "เกิดข้อผิดพลาด"));
     } finally {
       setProcessing(false);
     }
@@ -724,7 +727,7 @@ export function FaceScanModal({
           setUploadFaceDetected(false);
           setErrorMsg("ไม่พบใบหน้าในรูปภาพ กรุณาเลือกรูปที่เห็นใบหน้าชัดเจน");
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error("Upload face detection error:", err);
         setErrorMsg("เกิดข้อผิดพลาดในการตรวจจับใบหน้า");
       } finally {
@@ -871,7 +874,7 @@ export function FaceScanModal({
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-[var(--accent-blue)] fill-[var(--accent-blue)]/10" />
             <h3 className="font-bold text-white">
-              {mode === "search" ? "ค้นหารูปถ่ายด้วยใบหน้า" : "ลงทะเบียนใบหน้าอัจฉริยะ (3 มุม)"}
+              {mode === "search" ? "ค้นหารูปถ่ายด้วยใบหน้า" : "ลงทะเบียนใบหน้าตรง"}
             </h3>
           </div>
           <button

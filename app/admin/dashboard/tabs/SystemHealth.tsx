@@ -8,6 +8,7 @@ import {
   Activity, Database, Cpu, Wifi, WifiOff, RefreshCw,
   CheckCircle2, Clock, AlertTriangle, XCircle, RotateCcw, Server
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 interface HealthStats {
   totalUsers: number;
@@ -39,6 +40,8 @@ export function SystemHealth() {
   const [healthCheck, setHealthCheck] = useState<HealthCheck>({ status: "loading", responseTime: null });
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryMessage, setRetryMessage] = useState<string | null>(null);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -80,8 +83,26 @@ export function SystemHealth() {
     return () => clearInterval(interval);
   }, [refreshAll]);
 
+  const retryFailedJobs = async () => {
+    setRetrying(true);
+    setRetryMessage(null);
+    try {
+      const res = await fetch("/api/admin/pipeline/retry", { method: "PATCH" });
+      const data: { success?: boolean; retried?: number; error?: string } = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error ?? "Retry failed");
+      }
+      setRetryMessage(`ส่งกลับเข้าคิวแล้ว ${data.retried ?? 0} งาน`);
+      await refreshAll();
+    } catch (error) {
+      setRetryMessage(error instanceof Error ? error.message : "Retry failed");
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   const statusBadge = (status: string) => {
-    const map: Record<string, { label: string; cls: string; Icon: any }> = {
+    const map: Record<string, { label: string; cls: string; Icon: LucideIcon }> = {
       queued: { label: "รอคิว", cls: "text-[var(--accent-yellow)] bg-amber-950/20 border-amber-900/30", Icon: Clock },
       running: { label: "กำลังประมวล", cls: "text-[var(--accent-blue)] bg-blue-950/20 border-blue-900/30", Icon: RefreshCw },
       done: { label: "เสร็จสิ้น", cls: "text-[var(--accent-green)] bg-green-950/20 border-green-900/30", Icon: CheckCircle2 },
@@ -249,14 +270,20 @@ export function SystemHealth() {
                   <span className="text-[10px] font-bold text-[var(--text2)] uppercase tracking-wider">Processing Jobs ล่าสุด</span>
                   {stats.jobs.error > 0 && (
                     <button
-                      onClick={() => alert("ฟีเจอร์ Retry Failed Jobs: ส่ง PATCH /api/admin/pipeline/retry")}
+                      onClick={retryFailedJobs}
+                      disabled={retrying}
                       className="flex items-center gap-1 text-[10px] font-bold text-[var(--accent-red)] hover:text-white bg-red-950/20 border border-red-900/30 px-2.5 py-1 rounded-xl transition-colors"
                     >
                       <RotateCcw className="h-3 w-3" />
-                      Retry Failed ({stats.jobs.error})
+                      {retrying ? "Retrying..." : `Retry Failed (${stats.jobs.error})`}
                     </button>
                   )}
                 </div>
+                {retryMessage && (
+                  <div className="px-4 py-2 text-[10px] font-semibold text-[var(--text2)] border-b border-[var(--border)]">
+                    {retryMessage}
+                  </div>
+                )}
                 <div className="overflow-x-auto max-h-60">
                   <table className="w-full text-left border-collapse">
                     <thead>

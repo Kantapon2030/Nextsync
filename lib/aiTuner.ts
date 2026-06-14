@@ -24,6 +24,9 @@ export interface AISettings {
   blurMin: number;
   brightnessMin: number; // 0-1 float
   brightnessMax: number; // 0-1 float
+  pipelineBatchSize: number;
+  thumbnailSizeLg: number;
+  thumbnailSizeSm: number;
 }
 
 const SETTING_DEFAULTS: AISettings = {
@@ -34,6 +37,9 @@ const SETTING_DEFAULTS: AISettings = {
   blurMin: 100,
   brightnessMin: 0.12,
   brightnessMax: 0.94,
+  pipelineBatchSize: 5,
+  thumbnailSizeLg: 800,
+  thumbnailSizeSm: 400,
 };
 
 /**
@@ -57,7 +63,7 @@ export async function getSettingsFromDB(): Promise<AISettings> {
       return SETTING_DEFAULTS;
     }
 
-    const row = rows[0] as any;
+    const row = rows[0];
     const settings: AISettings = {
       efSearch: row.efSearch ?? SETTING_DEFAULTS.efSearch,
       cosineThreshold: row.faceSimilarityDist ?? SETTING_DEFAULTS.cosineThreshold,
@@ -66,6 +72,9 @@ export async function getSettingsFromDB(): Promise<AISettings> {
       blurMin: row.blurMin ?? SETTING_DEFAULTS.blurMin,
       brightnessMin: row.brightnessMin ?? SETTING_DEFAULTS.brightnessMin,
       brightnessMax: row.brightnessMax ?? SETTING_DEFAULTS.brightnessMax,
+      pipelineBatchSize: row.pipelineBatchSize ?? SETTING_DEFAULTS.pipelineBatchSize,
+      thumbnailSizeLg: row.thumbnailSizeLg ?? SETTING_DEFAULTS.thumbnailSizeLg,
+      thumbnailSizeSm: row.thumbnailSizeSm ?? SETTING_DEFAULTS.thumbnailSizeSm,
     };
 
     settingsCache.set(CACHE_KEY, { value: settings, cachedAt: Date.now() });

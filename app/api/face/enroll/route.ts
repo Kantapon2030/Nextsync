@@ -1,5 +1,5 @@
 // app/api/face/enroll/route.ts
-// Receives 1-3 face images via multipart/form-data,
+// Receives one front-facing image via multipart/form-data,
 // sends them to the Python ArcFace service, stores the 512-dim embedding.
 import { auth } from "@/lib/auth";
 import { db, users, userFaceEmbeddings } from "@/lib/db";
@@ -25,16 +25,10 @@ export async function POST(req: Request) {
       );
     }
 
-    // Parse multipart form — expect image1 (required), image2, image3 (optional)
+    // Parse multipart form — expect one front-facing image.
     const form = await req.formData();
-    const files: File[] = [];
-
-    for (const key of ["image1", "image2", "image3"]) {
-      const f = form.get(key);
-      if (f instanceof File && f.size > 0) {
-        files.push(f);
-      }
-    }
+    const image = form.get("image1");
+    const files = image instanceof File && image.size > 0 ? [image] : [];
 
     if (files.length === 0) {
       return NextResponse.json(
@@ -69,10 +63,10 @@ export async function POST(req: Request) {
       facesUsed: files.length,
       dim: embedding.length,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Face enrollment API error:", error);
     return NextResponse.json(
-      { error: error.message ?? "เกิดข้อผิดพลาดในการบันทึกข้อมูลใบหน้า" },
+      { error: error instanceof Error ? error.message : "เกิดข้อผิดพลาดในการบันทึกข้อมูลใบหน้า" },
       { status: 400 }
     );
   }

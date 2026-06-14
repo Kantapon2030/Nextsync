@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import {
   LayoutDashboard, Calendar, SlidersHorizontal, Cpu, Activity, RefreshCw, Calendar as CalIcon
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { StatsCards } from "@/components/admin/StatsCards";
 
 // Lazy load heavy tab components
@@ -22,7 +23,7 @@ interface StatsData {
 
 type TabId = "overview" | "face-settings" | "pipeline" | "health";
 
-const TABS: Array<{ id: TabId; label: string; labelEn: string; Icon: any; accent: string }> = [
+const TABS: Array<{ id: TabId; label: string; labelEn: string; Icon: LucideIcon; accent: string }> = [
   {
     id: "overview",
     label: "Events & Seasons",

@@ -8,6 +8,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { invalidateSettingsCache } from "@/lib/aiTuner";
 
+export const dynamic = "force-dynamic";
+
 const settingsSchema = z.object({
   efSearch: z.number().int().min(16).max(128).optional(),
   cosineThreshold: z.number().min(0.10).max(0.60).optional(),
@@ -22,6 +24,17 @@ const DEFAULTS = {
   maxResults: 50,
   minFaceConfidence: 0.85,
 };
+
+type FilterConfigInsert = typeof filterConfig.$inferInsert;
+
+function toSettings(row: typeof filterConfig.$inferSelect) {
+  return {
+    efSearch: row.efSearch ?? DEFAULTS.efSearch,
+    cosineThreshold: row.faceSimilarityDist ?? DEFAULTS.cosineThreshold,
+    maxResults: row.maxResults ?? DEFAULTS.maxResults,
+    minFaceConfidence: row.minFaceConfidence ?? DEFAULTS.minFaceConfidence,
+  };
+}
 
 async function ensureConfigRow() {
   const existing = await db
@@ -58,12 +71,7 @@ export async function GET() {
 
     return NextResponse.json({
       success: true,
-      settings: {
-        efSearch: (row as any).efSearch ?? DEFAULTS.efSearch,
-        cosineThreshold: row.faceSimilarityDist ?? DEFAULTS.cosineThreshold,
-        maxResults: (row as any).maxResults ?? DEFAULTS.maxResults,
-        minFaceConfidence: row.minFaceConfidence ?? DEFAULTS.minFaceConfidence,
-      },
+      settings: toSettings(row),
     });
   } catch (error) {
     console.error("GET settings error:", error);
@@ -83,7 +91,10 @@ export async function PATCH(req: Request) {
 
     await ensureConfigRow();
 
-    const updateFields: Record<string, any> = { updatedAt: new Date() };
+    const updateFields: Partial<FilterConfigInsert> = {
+      updatedAt: new Date(),
+      updatedBy: session.user.id,
+    };
     if (body.efSearch !== undefined) updateFields.efSearch = body.efSearch;
     if (body.cosineThreshold !== undefined) updateFields.faceSimilarityDist = body.cosineThreshold;
     if (body.maxResults !== undefined) updateFields.maxResults = body.maxResults;
@@ -100,12 +111,7 @@ export async function PATCH(req: Request) {
 
     return NextResponse.json({
       success: true,
-      settings: {
-        efSearch: (updated as any).efSearch ?? DEFAULTS.efSearch,
-        cosineThreshold: updated.faceSimilarityDist ?? DEFAULTS.cosineThreshold,
-        maxResults: (updated as any).maxResults ?? DEFAULTS.maxResults,
-        minFaceConfidence: updated.minFaceConfidence ?? DEFAULTS.minFaceConfidence,
-      },
+      settings: toSettings(updated),
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
