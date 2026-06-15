@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import onnxruntime as ort
 import subprocess
+from pathlib import Path
 from insightface.app import FaceAnalysis
 
 
@@ -33,13 +34,15 @@ def adaptive_batch_size(device: str, memory_mb: int = 0) -> int:
 
 class FaceEngine:
     def __init__(self, model_name="buffalo_l", min_score=0.65):
+        if hasattr(ort, "preload_dlls"):
+            ort.preload_dlls()
         available = ort.get_available_providers()
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if "CUDAExecutionProvider" in available else ["CPUExecutionProvider"]
         self.device = providers[0]
         self.gpu_memory_mb = detect_gpu_memory_mb() if self.device == "CUDAExecutionProvider" else 0
         self.batch_size = adaptive_batch_size(self.device, self.gpu_memory_mb)
         self.min_score = min_score
-        self.app = FaceAnalysis(name=model_name, providers=providers)
+        self.app = FaceAnalysis(name=model_name, root=str(Path(__file__).resolve().parent), providers=providers)
         self.app.prepare(ctx_id=0 if self.device == "CUDAExecutionProvider" else -1, det_size=(640, 640))
 
     def extract(self, image_bytes):

@@ -1,5 +1,5 @@
 insightface==0.7.3
-onnxruntime-gpu>=1.18,<2
+onnxruntime-gpu[cuda,cudnn]>=1.18,<2
 opencv-python-headless>=4.9,<5
 numpy>=1.26,<3
 Pillow>=10,<12

@@ -1,6 +1,12 @@
 $ErrorActionPreference = "Stop"
-$python = (Get-Command python).Source
-& $python -m pip install -r "$PSScriptRoot\requirements.txt"
-& $python "$PSScriptRoot\service.py" --startup auto install
-& $python "$PSScriptRoot\service.py" start
+$python = "$PSScriptRoot\.venv\Scripts\python.exe"
+$wrapper = "$PSScriptRoot\ShotSyncGPUWorker.exe"
+if (-not (Test-Path $python)) {
+  throw "Worker virtual environment not found. Create gpu-worker/.venv first."
+}
+if (-not (Test-Path $wrapper)) {
+  throw "WinSW wrapper not found at $wrapper."
+}
+& $wrapper install
+& $wrapper start
 Write-Host "ShotSyncGPUWorker installed and started."

@@ -1,10 +1,13 @@
 import os
 import socket
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+WORKER_DIR = Path(__file__).resolve().parent
+load_dotenv(WORKER_DIR / ".env")
+load_dotenv(WORKER_DIR.parent / ".env.local")
 
 
 @dataclass(frozen=True)
@@ -15,6 +18,7 @@ class Config:
     model_version: str = os.getenv("FACE_MODEL_VERSION", "buffalo_l-v1")
     lease_seconds: int = int(os.getenv("WORKER_LEASE_SECONDS", "300"))
     idle_seconds: float = float(os.getenv("WORKER_IDLE_SECONDS", "2"))
+    concurrency: int = int(os.getenv("WORKER_CONCURRENCY", "2"))
     min_face_score: float = float(os.getenv("MIN_FACE_SCORE", "0.65"))
     drive_email: str = os.environ["GOOGLE_SERVICE_ACCOUNT_EMAIL"]
     drive_key: str = os.environ["GOOGLE_PRIVATE_KEY"].replace("\\n", "\n")

@@ -1,7 +1,9 @@
 import io
 import logging
 import signal
+import threading
 import time
+from dataclasses import replace
 
 import boto3
 from google.oauth2 import service_account
@@ -64,10 +66,11 @@ class Worker:
         _, width, height, faces = self.engine.extract(raw)
         self.db.complete(task, {"thumbnail_url": thumbnail_url, "thumbnail_sm": thumbnail_sm, "width": width, "height": height, "model_version": self.config.model_version}, faces)
 
-    def run(self):
-        signal.signal(signal.SIGINT, lambda *_: setattr(self, "running", False))
-        if hasattr(signal, "SIGTERM"):
-            signal.signal(signal.SIGTERM, lambda *_: setattr(self, "running", False))
+    def run(self, register_signals=True):
+        if register_signals:
+            signal.signal(signal.SIGINT, lambda *_: setattr(self, "running", False))
+            if hasattr(signal, "SIGTERM"):
+                signal.signal(signal.SIGTERM, lambda *_: setattr(self, "running", False))
         while self.running:
             status = self.db.heartbeat(
                 "online", self.engine.device, self.engine.batch_size,
@@ -93,5 +96,26 @@ class Worker:
                 self.db.fail(task, type(exc).__name__, str(exc))
 
 
+def run_pool():
+    base_config = Config()
+    count = max(1, base_config.concurrency)
+    if count == 1:
+        Worker(base_config).run()
+        return
+
+    workers = [
+        Worker(replace(base_config, worker_id=f"{base_config.worker_id}-{index + 1}"))
+        for index in range(count)
+    ]
+    signal.signal(signal.SIGINT, lambda *_: [setattr(worker, "running", False) for worker in workers])
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, lambda *_: [setattr(worker, "running", False) for worker in workers])
+    threads = [threading.Thread(target=worker.run, args=(False,), name=worker.config.worker_id) for worker in workers]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+
 if __name__ == "__main__":
-    Worker().run()
+    run_pool()

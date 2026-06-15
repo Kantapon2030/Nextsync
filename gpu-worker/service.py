@@ -14,6 +14,7 @@ class ShotSyncWorkerService(win32serviceutil.ServiceFramework):
 
     def __init__(self, args):
         super().__init__(args)
+        os.chdir(os.path.dirname(os.path.abspath(__file__)))
         self.stop_event = win32event.CreateEvent(None, 0, 0, None)
         self.worker = Worker()
 
@@ -23,7 +24,6 @@ class ShotSyncWorkerService(win32serviceutil.ServiceFramework):
         win32event.SetEvent(self.stop_event)
 
     def SvcDoRun(self):
-        os.chdir(os.path.dirname(os.path.abspath(__file__)))
         servicemanager.LogInfoMsg("ShotSync GPU Worker starting")
         self.worker.run()
 

@@ -8,3 +8,6 @@ The worker is the primary processing plane. Vercel remains the dashboard and rec
 4. Confirm the worker heartbeat and throughput in Admin > System Health.
 
 Tasks are claimed transactionally with `FOR UPDATE SKIP LOCKED`. Expired leases are reclaimable, R2 keys are deterministic, and face rows are replaced in one transaction.
+
+The default service runs two independent worker lanes on a 6GB RTX 3050. Set
+`WORKER_CONCURRENCY=1` if other GPU applications need more VRAM.

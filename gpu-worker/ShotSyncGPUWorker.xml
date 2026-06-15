@@ -1,0 +1,18 @@
+<service>
+  <id>ShotSyncGPUWorker</id>
+  <name>ShotSync GPU Worker</name>
+  <description>Processes Drive photos and InsightFace embeddings on the local GPU.</description>
+  <executable>%BASE%\.venv\Scripts\python.exe</executable>
+  <arguments>%BASE%\worker.py</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <env name="WORKER_CONCURRENCY" value="2" />
+  <startmode>Automatic</startmode>
+  <stoptimeout>30sec</stoptimeout>
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <logpath>%BASE%\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10485760</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

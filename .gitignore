@@ -4,3 +4,8 @@ node_modules/
 out/
 build/
 velvety-folder-466404-n1-91082791b38c.json
+gpu-worker/.venv/
+gpu-worker/models/
+gpu-worker/**/__pycache__/
+gpu-worker/ShotSyncGPUWorker.exe
+gpu-worker/logs/
