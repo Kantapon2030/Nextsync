@@ -116,7 +116,7 @@ export const triggerQualityFilter = triggerProcessing;
 async function warmupFaceApi(): Promise<void> {
   try {
     const FACE_API_URL = process.env.FACE_API_URL ?? "https://kantapon020-shotsync-face-api.hf.space";
-    const res = await fetch(`${FACE_API_URL}/health`, {
+    const res = await fetch(`${FACE_API_URL}/status`, {
       method: "GET",
       signal: AbortSignal.timeout(8000), // 8 วินาที
     });

@@ -32,7 +32,7 @@ export async function GET() {
       // Abort if no response within 5 seconds
       const timeout = setTimeout(() => controller.abort(), 5000);
 
-      const res = await fetch(`${faceApiUrl}/health`, {
+      const res = await fetch(`${faceApiUrl}/status`, {
         signal: controller.signal,
         headers: {
           Authorization: `Bearer ${process.env.FACE_API_SECRET || ""}`,

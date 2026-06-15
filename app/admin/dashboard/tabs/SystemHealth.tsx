@@ -106,21 +106,35 @@ export function SystemHealth() {
     setProcessingNow(true);
     setRetryMessage(null);
     try {
-      const res = await fetch("/api/admin/pipeline/process-now", { method: "POST" });
-      const data: {
-        success?: boolean;
-        processed?: number;
-        remaining?: number;
-        message?: string;
-        error?: string;
-      } = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error ?? "Processing failed");
+      let totalProcessed = 0;
+      let remaining = 0;
+
+      // Each request stays within the serverless timeout. Keep requesting the
+      // next batch while this page remains open so admins do not need to click
+      // the button once per batch.
+      do {
+        const res = await fetch("/api/admin/pipeline/process-now", { method: "POST" });
+        const data: {
+          success?: boolean;
+          processed?: number;
+          remaining?: number;
+          message?: string;
+          error?: string;
+        } = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error ?? "Processing failed");
+        }
+
+        totalProcessed += data.processed ?? 0;
+        remaining = data.remaining ?? 0;
+        setRetryMessage(`Processed ${totalProcessed}; remaining ${remaining}`);
+        await fetchStats();
+      } while (remaining > 0);
+
+      if (totalProcessed === 0) {
+        setRetryMessage("No active queued jobs");
       }
-      setRetryMessage(
-        data.message ?? `Processed ${data.processed ?? 0}; remaining ${data.remaining ?? 0}`
-      );
-      await refreshAll();
+      await fetchHealthCheck();
     } catch (error) {
       setRetryMessage(error instanceof Error ? error.message : "Processing failed");
     } finally {
@@ -296,14 +310,14 @@ export function SystemHealth() {
                 <div className="bg-black/25 px-4 py-2.5 flex items-center justify-between border-b border-[var(--border)]">
                   <span className="text-[10px] font-bold text-[var(--text2)] uppercase tracking-wider">Processing Jobs ล่าสุด</span>
                   <div className="flex items-center gap-2">
-                    {stats.jobs.queued > 0 && (
+                    {stats.jobs.queued + stats.jobs.running > 0 && (
                       <button
                         onClick={processNextBatch}
                         disabled={processingNow}
                         className="flex items-center gap-1 text-[10px] font-bold text-[var(--accent-green)] hover:text-white bg-green-950/20 border border-green-900/30 px-2.5 py-1 rounded-xl transition-colors disabled:opacity-50"
                       >
                         <Play className="h-3 w-3" />
-                        {processingNow ? "Processing..." : "Process Next Batch"}
+                        {processingNow ? "Processing..." : "Recover & Process All"}
                       </button>
                     )}
                     {stats.jobs.error > 0 && (

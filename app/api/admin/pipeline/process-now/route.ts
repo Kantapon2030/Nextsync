@@ -15,6 +15,29 @@ export async function POST() {
   }
 
   try {
+    // A serverless invocation can be terminated before its catch block runs.
+    // Recover abandoned leases before looking for the next queued job.
+    await db.execute(sql`
+      UPDATE processing_jobs
+      SET status = 'queued', started_at = NULL
+      WHERE status = 'running'
+        AND started_at < NOW() - INTERVAL '2 minutes'
+    `);
+
+    // Keep progress accurate while the batch is running, not only after it ends.
+    await db.execute(sql`
+      UPDATE processing_jobs pj
+      SET total = pj.processed + pending.count
+      FROM (
+        SELECT event_id, COUNT(*)::int AS count
+        FROM photos
+        WHERE status = 'pending'
+        GROUP BY event_id
+      ) pending
+      WHERE pj.event_id = pending.event_id
+        AND pj.status IN ('queued', 'running')
+    `);
+
     const [row] = await db
       .select({ job: processingJobs })
       .from(processingJobs)
@@ -24,7 +47,12 @@ export async function POST() {
       .limit(1);
 
     if (!row) {
-      return NextResponse.json({ success: true, message: "No active queued jobs" });
+      return NextResponse.json({
+        success: true,
+        message: "No active queued jobs",
+        processed: 0,
+        remaining: 0,
+      });
     }
 
     const claimed = await db
