@@ -28,7 +28,16 @@ function authHeaders(): Record<string, string> {
  * Returns the 512-dim mean ArcFace embedding for DB storage.
  * Throws if no face is detected in any image.
  */
-export async function enrollFace(imageFiles: File[]): Promise<number[]> {
+export interface EnrollmentTemplate {
+  embedding: number[];
+  quality: number;
+}
+
+export async function enrollFace(imageFiles: File[]): Promise<{
+  templates: EnrollmentTemplate[];
+  centroid: number[];
+  modelVersion: string;
+}> {
   const form = new FormData();
   imageFiles.forEach((f, i) => {
     // Python service expects image1, image2, image3
@@ -53,13 +62,17 @@ export async function enrollFace(imageFiles: File[]): Promise<number[]> {
 
   const data = await res.json();
 
-  if (data.dim !== 512) {
+  if (data.dim !== 512 || !Array.isArray(data.templates) || !Array.isArray(data.centroid)) {
     throw new Error(
       `Face API returned unexpected embedding dimension: ${data.dim} (expected 512)`
     );
   }
 
-  return data.embedding as number[];
+  return {
+    templates: data.templates,
+    centroid: data.centroid,
+    modelVersion: data.model_version ?? "buffalo_l-v1",
+  };
 }
 
 // ── Extract ──────────────────────────────────────────────────────────────────

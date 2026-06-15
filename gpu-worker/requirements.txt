@@ -1,0 +1,12 @@
+insightface==0.7.3
+onnxruntime-gpu>=1.18,<2
+opencv-python-headless>=4.9,<5
+numpy>=1.26,<3
+Pillow>=10,<12
+psycopg[binary]>=3.2,<4
+google-api-python-client>=2.130,<3
+google-auth>=2.29,<3
+boto3>=1.34,<2
+python-dotenv>=1.0,<2
+pywin32>=306; platform_system == "Windows"
+pytest>=8,<9

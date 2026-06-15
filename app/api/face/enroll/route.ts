@@ -27,8 +27,9 @@ export async function POST(req: Request) {
 
     // Parse multipart form — expect one front-facing image.
     const form = await req.formData();
-    const image = form.get("image1");
-    const files = image instanceof File && image.size > 0 ? [image] : [];
+    const files = ["image1", "image2", "image3"]
+      .map((key) => form.get(key))
+      .filter((image): image is File => image instanceof File && image.size > 0);
 
     if (files.length === 0) {
       return NextResponse.json(
@@ -38,19 +39,35 @@ export async function POST(req: Request) {
     }
 
     // Call Python ArcFace service → returns 512-dim mean embedding
-    const embedding = await enrollFace(files);
+    const enrollment = await enrollFace(files);
 
     // Upsert: delete old embedding, insert new 512-dim one
     await db
       .delete(userFaceEmbeddings)
       .where(eq(userFaceEmbeddings.userId, userId));
 
-    await db.insert(userFaceEmbeddings).values({
-      userId,
-      embedding,              // number[512]
-      facesUsed: files.length,
-      model: "ArcFace",
-    });
+    await db.insert(userFaceEmbeddings).values([
+      ...enrollment.templates.map((template, index) => ({
+        userId,
+        embedding: template.embedding,
+        facesUsed: files.length,
+        model: "buffalo_l",
+        modelVersion: enrollment.modelVersion,
+        templateType: "template",
+        angle: ["front", "left", "right"][index] ?? `angle-${index + 1}`,
+        qualityScore: template.quality,
+      })),
+      {
+        userId,
+        embedding: enrollment.centroid,
+        facesUsed: files.length,
+        model: "buffalo_l",
+        modelVersion: enrollment.modelVersion,
+        templateType: "centroid",
+        angle: "centroid",
+        qualityScore: Math.min(...enrollment.templates.map((template) => template.quality)),
+      },
+    ]);
 
     // Mark user as enrolled
     await db
@@ -61,7 +78,8 @@ export async function POST(req: Request) {
     return NextResponse.json({
       success: true,
       facesUsed: files.length,
-      dim: embedding.length,
+      dim: enrollment.centroid.length,
+      modelVersion: enrollment.modelVersion,
     });
   } catch (error: unknown) {
     console.error("Face enrollment API error:", error);

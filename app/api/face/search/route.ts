@@ -17,6 +17,7 @@ const searchSchema = z.object({
   seasonId: z.string().optional(),
   eventId: z.string().optional(),
   timeslot: z.string().optional(),
+  offset: z.number().int().nonnegative().max(10_000).optional(),
 });
 
 interface SearchRow extends Record<string, unknown> {
@@ -43,16 +44,19 @@ export async function POST(req: Request) {
 
     // Parse optional filter params from body
     const body = await req.json().catch(() => ({}));
-    const { limit, seasonId, eventId, timeslot } = searchSchema.parse(body);
+    const { limit, seasonId, eventId, timeslot, offset = 0 } = searchSchema.parse(body);
     const settings = await getSettingsFromDB();
     const resultLimit = Math.min(limit ?? settings.maxResults, settings.maxResults);
 
     // Load user's enrolled ArcFace embedding
     const userEmb = await db
-      .select({ embedding: userFaceEmbeddings.embedding })
+      .select({
+        embedding: userFaceEmbeddings.embedding,
+        templateType: userFaceEmbeddings.templateType,
+        modelVersion: userFaceEmbeddings.modelVersion,
+      })
       .from(userFaceEmbeddings)
       .where(eq(userFaceEmbeddings.userId, userId))
-      .limit(1);
 
     if (!userEmb[0]) {
       return NextResponse.json(
@@ -64,8 +68,15 @@ export async function POST(req: Request) {
       );
     }
 
-    const queryVector = userEmb[0].embedding; // number[512]
+    const centroid = userEmb.find((embedding) => embedding.templateType === "centroid") ?? userEmb[0];
+    const queryVector = centroid.embedding;
     const queryVectorStr = `[${queryVector.join(",")}]`;
+    const templateDistances = userEmb
+      .filter((embedding) => embedding.templateType !== "centroid")
+      .map((embedding) => sql`(pfe.embedding <=> ${`[${embedding.embedding.join(",")}]`}::vector)`);
+    const rerankDistance = templateDistances.length
+      ? sql`LEAST(${sql.join(templateDistances, sql`, `)})`
+      : sql`(pfe.embedding <=> ${queryVectorStr}::vector)`;
 
     const threshold = settings.cosineThreshold;
 
@@ -92,7 +103,14 @@ export async function POST(req: Request) {
       WITH runtime_settings AS (
         SELECT set_config('hnsw.ef_search', ${String(settings.efSearch)}, true)
       )
-      SELECT DISTINCT ON (p.id)
+      , candidates AS (
+        SELECT pfe.photo_id
+        FROM photo_face_embeddings pfe
+        CROSS JOIN runtime_settings
+        ORDER BY pfe.embedding <=> ${queryVectorStr}::vector
+        LIMIT ${Math.max(resultLimit * 20, 200)}
+      ), ranked AS (
+      SELECT
         p.id AS "id",
         p.event_id AS "eventId",
         p.season_id AS "seasonId",
@@ -107,32 +125,37 @@ export async function POST(req: Request) {
         p.height AS "height",
         p.face_count AS "faceCount",
         p.created_at AS "createdAt",
-        (pfe.embedding <=> ${queryVectorStr}::vector) AS "distance",
-        (1 - (pfe.embedding <=> ${queryVectorStr}::vector)) AS "score"
+        MIN(${rerankDistance}) AS "distance",
+        MAX(1 - ${rerankDistance}) AS "score"
       FROM photo_face_embeddings pfe
-      CROSS JOIN runtime_settings
+      JOIN candidates c ON c.photo_id = pfe.photo_id
       JOIN photos p ON p.id = pfe.photo_id
       JOIN events e ON e.id = p.event_id AND e.is_active = true
       WHERE
         ${whereClause}
-        AND (pfe.embedding <=> ${queryVectorStr}::vector) < ${threshold}
-      ORDER BY p.id, (pfe.embedding <=> ${queryVectorStr}::vector) ASC
+      GROUP BY p.id
+      )
+      SELECT *,
+        CASE WHEN distance <= ${threshold * 0.72} THEN 'high'
+             WHEN distance <= ${threshold * 0.88} THEN 'medium'
+             ELSE 'low' END AS "confidenceTier"
+      FROM ranked
+      WHERE distance < ${threshold}
+      ORDER BY distance ASC
       LIMIT ${resultLimit}
+      OFFSET ${offset}
     `;
 
     const results = await db.execute(query);
     const rows = (results.rows ?? []) as SearchRow[];
 
-    // Sort final results by best distance
-    const sorted = [...rows].sort(
-      (a, b) => (a.distance ?? 1) - (b.distance ?? 1)
-    );
-
     return NextResponse.json({
       success: true,
-      photos: sorted,
-      count: sorted.length,
+      photos: rows,
+      count: rows.length,
       threshold,
+      modelVersion: centroid.modelVersion ?? "buffalo_l-v1",
+      nextOffset: rows.length === resultLimit ? offset + resultLimit : null,
     });
   } catch (error: unknown) {
     if (error instanceof z.ZodError) {

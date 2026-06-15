@@ -1,7 +1,6 @@
 import { auth } from "@/lib/auth";
-import { db, events, photos } from "@/lib/db";
-import { eq, and } from "drizzle-orm";
-import { triggerQualityFilter } from "@/lib/pipeline";
+import { db, events } from "@/lib/db";
+import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { syncEventPhotos } from "@/lib/syncEventPhotos";
 
@@ -19,17 +18,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!event || !event.driveFolderId) {
       return NextResponse.json({ error: "No Drive folder linked to this event" }, { status: 400 });
     }
-
-    // Reset rejected photos of this event to pending and null blurScore so they get re-evaluated on sync
-    await db
-      .update(photos)
-      .set({
-        status: "pending",
-        blurScore: null,
-        rejectReason: null,
-        processedAt: null,
-      })
-      .where(and(eq(photos.eventId, eventId), eq(photos.status, "rejected")));
 
     // Update syncStatus = 'syncing'
     await db.update(events).set({ syncStatus: "syncing" }).where(eq(events.id, eventId));
@@ -51,13 +39,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         })
         .where(eq(events.id, eventId));
 
-      await triggerQualityFilter(eventId);
-
       return NextResponse.json({
         success: true,
-        synced: syncResult.added,
+        added: syncResult.added,
+        modified: syncResult.modified,
         removed: syncResult.removed,
-        skipped: syncResult.total - syncResult.added,
+        queued: syncResult.queued,
+        failed: syncResult.failed,
+        skipped: syncResult.total - syncResult.added - syncResult.modified,
         total: syncResult.total,
       });
     } catch (syncError) {

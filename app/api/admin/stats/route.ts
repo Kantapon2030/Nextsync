@@ -100,6 +100,41 @@ export async function GET() {
       .orderBy(sql`${photos.createdAt} DESC`)
       .limit(10);
 
+    const taskSummary = await db.execute(sql`
+      SELECT stage, state, count(*)::int AS count
+      FROM photo_processing_tasks
+      GROUP BY stage, state
+    `);
+    const taskStages = (taskSummary.rows ?? []).reduce<Record<string, number>>((summary, row) => {
+      const stage = String(row.stage);
+      summary[stage] = (summary[stage] ?? 0) + Number(row.count);
+      return summary;
+    }, {});
+    const activeTasks = (taskSummary.rows ?? []).reduce(
+      (total, row) => total + (["queued", "running", "retry"].includes(String(row.state)) ? Number(row.count) : 0),
+      0
+    );
+
+    const throughputResult = await db.execute(sql`
+      SELECT count(*)::int AS completed
+      FROM photo_processing_tasks
+      WHERE completed_at >= now() - interval '5 minutes'
+    `);
+    const throughputPerMinute = Number(throughputResult.rows?.[0]?.completed ?? 0) / 5;
+    const etaMinutes = throughputPerMinute > 0 ? Math.ceil(activeTasks / throughputPerMinute) : null;
+
+    const workersResult = await db.execute(sql`
+      SELECT worker_id AS "workerId", status, hostname, version,
+             model_version AS "modelVersion", device, gpu_name AS "gpuName",
+             gpu_memory_mb AS "gpuMemoryMb", batch_size AS "batchSize",
+             current_task_id AS "currentTaskId", processed_total AS "processedTotal",
+             failed_total AS "failedTotal", last_error AS "lastError",
+             last_seen_at AS "lastSeenAt",
+             (last_seen_at > now() - interval '45 seconds') AS online
+      FROM worker_heartbeats
+      ORDER BY last_seen_at DESC
+    `);
+
     return NextResponse.json({
       success: true,
       totalUsers,
@@ -108,6 +143,10 @@ export async function GET() {
       jobs: jobStats,
       recentJobs,
       recentActivity,
+      taskStages,
+      throughputPerMinute,
+      etaMinutes,
+      workers: workersResult.rows ?? [],
     });
   } catch (error) {
     console.error("GET stats API error:", error);

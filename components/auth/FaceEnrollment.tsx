@@ -1,21 +1,24 @@
 // components/auth/FaceEnrollment.tsx
-// Single front-facing capture UI using camera capture with automatic countdown.
-// Sends images directly to /api/face/enroll which delegates to Python ArcFace service.
+// Three-angle capture UI for InsightFace enrollment templates.
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { CheckCircle2, AlertCircle, RefreshCw, Camera, Sparkles } from "lucide-react";
 
-type Angle = "ตรง";
+type Angle = "ตรง" | "ซ้าย" | "ขวา";
 
-const ANGLES: Angle[] = ["ตรง"];
+const ANGLES: Angle[] = ["ตรง", "ซ้าย", "ขวา"];
 
 const ANGLE_HINT: Record<Angle, string> = {
   ตรง: "มองตรงเข้าหากล้อง รักษาระยะห่าง 40–60 ซม. 😐",
+  ซ้าย: "หันหน้าไปทางซ้ายเล็กน้อย โดยให้ใบหน้ายังอยู่ในกรอบ",
+  ขวา: "หันหน้าไปทางขวาเล็กน้อย โดยให้ใบหน้ายังอยู่ในกรอบ",
 };
 
 const ANGLE_COLOR: Record<Angle, string> = {
   ตรง: "var(--accent-blue)",
+  ซ้าย: "var(--accent-purple)",
+  ขวา: "var(--accent-green)",
 };
 
 interface FaceEnrollmentProps {

@@ -34,7 +34,32 @@ async function main() {
   await client.connect();
 
   try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        filename text PRIMARY KEY,
+        applied_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    const appliedRows = await client.query<{ filename: string }>("SELECT filename FROM schema_migrations");
+    const applied = new Set(appliedRows.rows.map((row) => row.filename));
+
+    // Existing deployments predate migration tracking. Record the known
+    // baseline so destructive historical migrations are not replayed.
+    if (applied.size === 0) {
+      const existingUsers = await client.query<{ exists: string | null }>("SELECT to_regclass('public.users') AS exists");
+      if (existingUsers.rows[0]?.exists) {
+        for (const file of sqlFiles.filter((name) => name <= "0010_admin_runtime_settings.sql")) {
+          await client.query("INSERT INTO schema_migrations(filename) VALUES ($1) ON CONFLICT DO NOTHING", [file]);
+          applied.add(file);
+        }
+      }
+    }
+
     for (const file of sqlFiles) {
+      if (applied.has(file)) {
+        console.log(`Skipping applied migration: ${file}`);
+        continue;
+      }
       const filePath = path.join(migrationsDir, file);
       console.log(`Running migration: ${file}...`);
       const sql = fs.readFileSync(filePath, "utf8");
@@ -51,6 +76,7 @@ async function main() {
       for (const statement of statements) {
         await client.query(statement);
       }
+      await client.query("INSERT INTO schema_migrations(filename) VALUES ($1)", [file]);
       console.log(`✓ ${file} executed successfully!`);
     }
     console.log("✓ All database migrations completed successfully!");

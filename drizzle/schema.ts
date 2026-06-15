@@ -62,7 +62,11 @@ export const userFaceEmbeddings = pgTable("user_face_embeddings", {
   embedding: vector("embedding").notNull(),   // 512-dim ArcFace
   enrolledAt: timestamp("enrolled_at", { withTimezone: true }).defaultNow(),
   facesUsed: integer("faces_used").default(1),  // Number of angles captured (1-3)
-  model: text("model").default("ArcFace"),       // Model version tracking
+  model: text("model").default("buffalo_l"),
+  modelVersion: text("model_version").default("buffalo_l-v1"),
+  templateType: text("template_type").default("template"),
+  angle: text("angle"),
+  qualityScore: doublePrecision("quality_score"),
 });
 
 // ─────────────────────────────────────────
@@ -127,6 +131,9 @@ export const photos = pgTable("photos", {
   // File info
   filename: text("filename").notNull(),
   fileSize: integer("file_size"),
+  sourceModifiedAt: timestamp("source_modified_at", { withTimezone: true }),
+  sourceChecksum: text("source_checksum"),
+  sourceSyncStatus: text("source_sync_status").default("active"),
   width: integer("width"),
   height: integer("height"),
 
@@ -138,6 +145,8 @@ export const photos = pgTable("photos", {
 
   // Processing status
   status: text("status", { enum: photoStatusEnum }).default("pending"),
+  processingState: text("processing_state").default("queued"),
+  processingVersion: text("processing_version"),
   rejectReason: text("reject_reason", { enum: rejectReasonEnum }),
   manuallyApproved: boolean("manually_approved").default(false),
 
@@ -148,6 +157,8 @@ export const photos = pgTable("photos", {
   photosStatusIdx: index("photos_status_idx").on(table.status),
   photosEventIdIdx: index("photos_event_id_idx").on(table.eventId),
   photosSeasonIdIdx: index("photos_season_id_idx").on(table.seasonId),
+  photosProcessingStateIdx: index("photos_processing_state_idx").on(table.processingState),
+  photosEventStatusCreatedIdx: index("photos_event_status_created_idx").on(table.eventId, table.status, table.createdAt),
 }));
 
 // ─────────────────────────────────────────
@@ -164,7 +175,9 @@ export const photoFaceEmbeddings = pgTable("photo_face_embeddings", {
   bboxW: doublePrecision("bbox_w"),
   bboxH: doublePrecision("bbox_h"),
   confidence: doublePrecision("confidence"),
-  model: text("model").default("ArcFace"),     // Model version tracking
+  qualityScore: doublePrecision("quality_score"),
+  model: text("model").default("buffalo_l"),
+  modelVersion: text("model_version").default("buffalo_l-v1"),
 }, (table) => ({
   photoFaceHnswIdx: index("photo_face_hnsw_idx")
     .on(table.embedding)
@@ -205,6 +218,48 @@ export const processingJobs = pgTable("processing_jobs", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   startedAt: timestamp("started_at", { withTimezone: true }),
   doneAt: timestamp("done_at", { withTimezone: true }),
+});
+
+export const photoProcessingTasks = pgTable("photo_processing_tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  photoId: uuid("photo_id").notNull().unique().references(() => photos.id, { onDelete: "cascade" }),
+  eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+  state: text("state").notNull().default("queued"),
+  stage: text("stage").notNull().default("queued"),
+  priority: integer("priority").notNull().default(100),
+  attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(5),
+  leaseOwner: text("lease_owner"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  nextRetryAt: timestamp("next_retry_at", { withTimezone: true }).defaultNow(),
+  errorCode: text("error_code"),
+  errorMessage: text("error_message"),
+  modelVersion: text("model_version").notNull().default("buffalo_l-v1"),
+  stageStartedAt: timestamp("stage_started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  taskClaimIdx: index("photo_processing_tasks_claim_idx").on(table.state, table.nextRetryAt, table.priority),
+  taskEventStateIdx: index("photo_processing_tasks_event_state_idx").on(table.eventId, table.state),
+}));
+
+export const workerHeartbeats = pgTable("worker_heartbeats", {
+  workerId: text("worker_id").primaryKey(),
+  status: text("status").notNull().default("online"),
+  hostname: text("hostname"),
+  version: text("version"),
+  modelVersion: text("model_version"),
+  device: text("device"),
+  gpuName: text("gpu_name"),
+  gpuMemoryMb: integer("gpu_memory_mb"),
+  batchSize: integer("batch_size"),
+  currentTaskId: uuid("current_task_id"),
+  processedTotal: integer("processed_total").notNull().default(0),
+  failedTotal: integer("failed_total").notNull().default(0),
+  lastError: text("last_error"),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow(),
+  startedAt: timestamp("started_at", { withTimezone: true }).defaultNow(),
 });
 
 // ─────────────────────────────────────────

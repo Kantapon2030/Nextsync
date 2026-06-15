@@ -108,6 +108,8 @@ export async function getNewFilesFromFolder(
       downloadUrl: img.url,
       driveThumbnail: img.url,
       createdAt: new Date(),
+      modifiedAt: new Date(),
+      checksum: `${folderId}-${img.id}`,
     }));
   }
 
@@ -152,7 +154,7 @@ export async function getNewFilesFromFolder(
     do {
       const res: any = await drive.files.list({
         q,
-        fields: "nextPageToken, files(id, name, size, createdTime, webContentLink, webViewLink, thumbnailLink)",
+        fields: "nextPageToken, files(id, name, size, createdTime, modifiedTime, md5Checksum, webContentLink, webViewLink, thumbnailLink)",
         pageSize: 1000,
         pageToken,
         orderBy: "createdTime desc",
@@ -176,6 +178,8 @@ export async function getNewFilesFromFolder(
     downloadUrl: `https://drive.google.com/uc?export=download&id=${f.id}`,
     driveThumbnail: f.thumbnailLink || null,
     createdAt: new Date(f.createdTime!),
+    modifiedAt: new Date(f.modifiedTime || f.createdTime!),
+    checksum: f.md5Checksum || null,
   }));
 }
 
@@ -236,4 +240,6 @@ export interface DriveFile {
   downloadUrl: string;
   driveThumbnail: string | null;
   createdAt: Date;
+  modifiedAt: Date;
+  checksum: string | null;
 }

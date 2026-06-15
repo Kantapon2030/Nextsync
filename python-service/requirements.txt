@@ -1,28 +1,8 @@
-# ─────────────────────────────────────────────────────────────
-# ShotSync Face API — Python Dependencies
-# Pinned versions for reproducible builds on Hugging Face Spaces
-# Updated: 2026-06  |  Python: 3.10
-# ─────────────────────────────────────────────────────────────
-
-# ── Web Framework ─────────────────────────────────────────────
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
 python-multipart==0.0.9
-
-# ── Face Recognition ──────────────────────────────────────────
-deepface==0.0.93
-
-# ── TensorFlow (CPU-only; HF Spaces doesn't guarantee GPU) ────
-tensorflow-cpu==2.15.0
-tf-keras==2.15.0
-
-# ── Computer Vision (headless: no GUI, avoids libGL issues) ───
-# opencv-python-headless saves ~200 MB vs opencv-python
+insightface==0.7.3
+onnxruntime==1.18.1
 opencv-python-headless==4.9.0.80
-
-# ── Numerics / Image processing ───────────────────────────────
 numpy==1.26.4
 pillow==10.3.0
-
-# ── Utilities ─────────────────────────────────────────────────
-requests==2.31.0

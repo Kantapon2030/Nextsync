@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { retryFailedPhotoTasks } from "@/lib/taskQueue";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,12 @@ export async function PATCH() {
         )
     `);
 
-    return NextResponse.json({ success: true, retried: result.rowCount ?? 0 });
+    const photoTasks = await retryFailedPhotoTasks();
+    return NextResponse.json({
+      success: true,
+      retried: (result.rowCount ?? 0) + photoTasks,
+      photoTasks,
+    });
   } catch (error) {
     console.error("PATCH retry failed jobs error:", error);
     return NextResponse.json({ error: "Failed to retry jobs" }, { status: 500 });

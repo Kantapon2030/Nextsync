@@ -5,7 +5,6 @@ export const maxDuration = 60;
 import { createHash, timingSafeEqual } from "crypto";
 import { db, events } from "@/lib/db";
 import { and, eq, isNotNull } from "drizzle-orm";
-import { triggerQualityFilter } from "@/lib/pipeline";
 import { NextResponse } from "next/server";
 import { syncEventPhotos } from "@/lib/syncEventPhotos";
 
@@ -73,17 +72,13 @@ export async function GET(req: Request) {
           })
           .where(eq(events.id, event.id));
 
-        // Trigger the quality filter pipeline (awaited to prevent early environment shutdown on Vercel)
-        try {
-          await triggerQualityFilter(event.id);
-        } catch (err) {
-          console.error(`[CRON] Quality filter trigger failed for event ${event.id}:`, err);
-        }
-
         results.push({
           eventId: event.id,
-          synced: syncResult.added,
+          added: syncResult.added,
+          modified: syncResult.modified,
           removed: syncResult.removed,
+          queued: syncResult.queued,
+          failed: syncResult.failed,
         });
       } catch (err) {
         console.error(`[CRON] Failed to sync event ${event.id}:`, err);

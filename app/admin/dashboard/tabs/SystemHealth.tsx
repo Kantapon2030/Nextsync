@@ -26,6 +26,13 @@ interface HealthStats {
     startedAt: string | null;
     doneAt: string | null;
   }>;
+  taskStages: Record<string, number>;
+  throughputPerMinute: number;
+  etaMinutes: number | null;
+  workers: Array<{
+    workerId: string; status: string; online: boolean; gpuName: string | null;
+    batchSize: number | null; processedTotal: number; failedTotal: number; lastSeenAt: string;
+  }>;
 }
 
 interface HealthCheck {
@@ -303,6 +310,33 @@ export function SystemHealth() {
                 </div>
               ))}
             </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {Object.entries(stats.taskStages).map(([stage, count]) => (
+                <div key={stage} className="p-2.5 bg-black/20 border border-[var(--border)] rounded-xl">
+                  <div className="text-[9px] uppercase font-bold text-[var(--text3)]">{stage}</div>
+                  <div className="text-lg font-bold text-[var(--accent-blue)]">{count}</div>
+                </div>
+              ))}
+            </div>
+            <div className="text-[11px] text-[var(--text2)]">
+              Throughput: <b>{stats.throughputPerMinute.toFixed(1)} photos/min</b>
+              {" · "}ETA: <b>{stats.etaMinutes === null ? "waiting for worker" : `${stats.etaMinutes} min`}</b>
+            </div>
+
+            {stats.workers.map((worker) => (
+              <div key={worker.workerId} className="p-3 bg-black/20 border border-[var(--border)] rounded-xl flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-[var(--text)]">{worker.workerId}</div>
+                  <div className="text-[10px] text-[var(--text3)]">
+                    {worker.gpuName ?? "CPU"} · batch {worker.batchSize ?? 1} · processed {worker.processedTotal}
+                  </div>
+                </div>
+                <span className={`text-[10px] font-bold ${worker.online ? "text-[var(--accent-green)]" : "text-[var(--accent-red)]"}`}>
+                  {worker.online ? worker.status : "offline"}
+                </span>
+              </div>
+            ))}
 
             {/* Jobs Table */}
             {stats.recentJobs.length > 0 && (
