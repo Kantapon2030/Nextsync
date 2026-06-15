@@ -1,9 +1,9 @@
 import { auth } from "@/lib/auth";
 import { db, events, photos } from "@/lib/db";
-import { eq, inArray, sql, and } from "drizzle-orm";
-import { getNewFilesFromFolder } from "@/lib/drive";
+import { eq, and } from "drizzle-orm";
 import { triggerQualityFilter } from "@/lib/pipeline";
 import { NextResponse } from "next/server";
+import { syncEventPhotos } from "@/lib/syncEventPhotos";
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
@@ -35,42 +35,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     await db.update(events).set({ syncStatus: "syncing" }).where(eq(events.id, eventId));
 
     try {
-      // Fetch new files modified since lastSyncedAt
-      const newFiles = await getNewFilesFromFolder(
-        event.driveFolderId,
-        event.lastSyncedAt ?? undefined
-      );
-
-      let toInsert = [...newFiles];
-
-      if (newFiles.length > 0) {
-        // Query to check which file IDs already exist in database for this event to prevent duplicates
-        const existing = await db
-          .select({ driveFileId: photos.driveFileId })
-          .from(photos)
-          .where(eq(photos.eventId, eventId));
-
-        const existingIds = new Set(existing.map((e: { driveFileId: string }) => e.driveFileId));
-        toInsert = newFiles.filter((f) => !existingIds.has(f.driveFileId));
-
-        if (toInsert.length > 0) {
-          // Bulk insert new files as 'pending'
-          await db.insert(photos).values(
-            toInsert.map((f) => ({
-              id: crypto.randomUUID(),
-              eventId: eventId,
-              seasonId: event.seasonId,
-              driveFileId: f.driveFileId,
-              driveUrl: f.driveUrl,
-              downloadUrl: f.downloadUrl,
-              filename: f.filename,
-              fileSize: f.fileSize,
-              status: "pending" as const,
-              createdAt: new Date(),
-            }))
-          );
-        }
-      }
+      const syncResult = await syncEventPhotos({
+        id: event.id,
+        seasonId: event.seasonId,
+        driveFolderId: event.driveFolderId,
+      });
 
       // Update syncStatus = 'done', lastSyncedAt, photoCount
       await db
@@ -78,20 +47,18 @@ export async function POST(req: Request, { params }: { params: { id: string } })
         .set({
           lastSyncedAt: new Date(),
           syncStatus: "done",
-          photoCount: sql`photo_count + ${toInsert.length}`,
+          photoCount: syncResult.total,
         })
         .where(eq(events.id, eventId));
 
-      // Trigger the quality filter pipeline asynchronously (fire-and-forget)
-      triggerQualityFilter(eventId).catch((err) => {
-        console.error("Async quality filter pipeline crash:", err);
-      });
+      await triggerQualityFilter(eventId);
 
       return NextResponse.json({
         success: true,
-        synced: toInsert.length,
-        skipped: newFiles.length - toInsert.length,
-        total: newFiles.length,
+        synced: syncResult.added,
+        removed: syncResult.removed,
+        skipped: syncResult.total - syncResult.added,
+        total: syncResult.total,
       });
     } catch (syncError) {
       // Revert status to error

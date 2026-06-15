@@ -6,7 +6,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Activity, Database, Cpu, Wifi, WifiOff, RefreshCw,
-  CheckCircle2, Clock, AlertTriangle, XCircle, RotateCcw, Server
+  CheckCircle2, Clock, AlertTriangle, XCircle, RotateCcw, Server, Play
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -41,6 +41,7 @@ export function SystemHealth() {
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [processingNow, setProcessingNow] = useState(false);
   const [retryMessage, setRetryMessage] = useState<string | null>(null);
 
   const fetchStats = useCallback(async () => {
@@ -98,6 +99,32 @@ export function SystemHealth() {
       setRetryMessage(error instanceof Error ? error.message : "Retry failed");
     } finally {
       setRetrying(false);
+    }
+  };
+
+  const processNextBatch = async () => {
+    setProcessingNow(true);
+    setRetryMessage(null);
+    try {
+      const res = await fetch("/api/admin/pipeline/process-now", { method: "POST" });
+      const data: {
+        success?: boolean;
+        processed?: number;
+        remaining?: number;
+        message?: string;
+        error?: string;
+      } = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error ?? "Processing failed");
+      }
+      setRetryMessage(
+        data.message ?? `Processed ${data.processed ?? 0}; remaining ${data.remaining ?? 0}`
+      );
+      await refreshAll();
+    } catch (error) {
+      setRetryMessage(error instanceof Error ? error.message : "Processing failed");
+    } finally {
+      setProcessingNow(false);
     }
   };
 
@@ -268,16 +295,28 @@ export function SystemHealth() {
               <div className="rounded-2xl border border-[var(--border)] overflow-hidden">
                 <div className="bg-black/25 px-4 py-2.5 flex items-center justify-between border-b border-[var(--border)]">
                   <span className="text-[10px] font-bold text-[var(--text2)] uppercase tracking-wider">Processing Jobs ล่าสุด</span>
-                  {stats.jobs.error > 0 && (
-                    <button
-                      onClick={retryFailedJobs}
-                      disabled={retrying}
-                      className="flex items-center gap-1 text-[10px] font-bold text-[var(--accent-red)] hover:text-white bg-red-950/20 border border-red-900/30 px-2.5 py-1 rounded-xl transition-colors"
-                    >
-                      <RotateCcw className="h-3 w-3" />
-                      {retrying ? "Retrying..." : `Retry Failed (${stats.jobs.error})`}
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {stats.jobs.queued > 0 && (
+                      <button
+                        onClick={processNextBatch}
+                        disabled={processingNow}
+                        className="flex items-center gap-1 text-[10px] font-bold text-[var(--accent-green)] hover:text-white bg-green-950/20 border border-green-900/30 px-2.5 py-1 rounded-xl transition-colors disabled:opacity-50"
+                      >
+                        <Play className="h-3 w-3" />
+                        {processingNow ? "Processing..." : "Process Next Batch"}
+                      </button>
+                    )}
+                    {stats.jobs.error > 0 && (
+                      <button
+                        onClick={retryFailedJobs}
+                        disabled={retrying}
+                        className="flex items-center gap-1 text-[10px] font-bold text-[var(--accent-red)] hover:text-white bg-red-950/20 border border-red-900/30 px-2.5 py-1 rounded-xl transition-colors"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        {retrying ? "Retrying..." : `Retry Failed (${stats.jobs.error})`}
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {retryMessage && (
                   <div className="px-4 py-2 text-[10px] font-semibold text-[var(--text2)] border-b border-[var(--border)]">

@@ -68,3 +68,11 @@ export async function deleteFromR2(key: string): Promise<void> {
     throw error;
   }
 }
+
+export function getR2KeyFromUrl(url: string): string {
+  try {
+    return new URL(url).pathname.replace(/^\/+/, "");
+  } catch {
+    return url.replace(/^\/+/, "");
+  }
+}

@@ -4,7 +4,7 @@ import { db, photos } from "@/lib/db";
 import { eq, inArray } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { deleteFromR2 } from "@/lib/r2";
+import { deleteFromR2, getR2KeyFromUrl } from "@/lib/r2";
 
 const bulkSchema = z.object({
   photoIds: z.array(z.string().uuid()).min(1, "กรุณาเลือกรูปภาพอย่างน้อย 1 รูป"),
@@ -93,8 +93,7 @@ export async function DELETE(req: Request) {
     // Cleanup R2 thumbnails in background / try-catch
     for (const p of photosToDelete) {
       if (p.thumbnailUrl) {
-        const parts = p.thumbnailUrl.split("/");
-        const key = parts[parts.length - 1];
+        const key = getR2KeyFromUrl(p.thumbnailUrl);
         try {
           await deleteFromR2(key);
         } catch (err) {
@@ -102,8 +101,7 @@ export async function DELETE(req: Request) {
         }
       }
       if (p.thumbnailSm) {
-        const parts = p.thumbnailSm.split("/");
-        const key = parts[parts.length - 1];
+        const key = getR2KeyFromUrl(p.thumbnailSm);
         try {
           await deleteFromR2(key);
         } catch (err) {

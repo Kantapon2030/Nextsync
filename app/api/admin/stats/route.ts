@@ -1,7 +1,7 @@
 // app/api/admin/stats/route.ts
 // Extended to include photo_face_embeddings count and processing_jobs queue data
 import { auth } from "@/lib/auth";
-import { db, users, photos, photoFaceEmbeddings, processingJobs } from "@/lib/db";
+import { db, users, photos, photoFaceEmbeddings, processingJobs, events } from "@/lib/db";
 import { eq, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
@@ -25,6 +25,8 @@ export async function GET() {
         count: sql<number>`count(*)`,
       })
       .from(photos)
+      .innerJoin(events, eq(events.id, photos.eventId))
+      .where(eq(events.isActive, true))
       .groupBy(photos.status)) as { status: "approved" | "rejected" | "pending" | null; count: number }[];
 
     const photoStats = { total: 0, approved: 0, rejected: 0, pending: 0 };
@@ -39,7 +41,10 @@ export async function GET() {
     // 3. Total face embeddings indexed
     const embeddingsCountResult = await db
       .select({ count: sql<number>`count(*)` })
-      .from(photoFaceEmbeddings);
+      .from(photoFaceEmbeddings)
+      .innerJoin(photos, eq(photos.id, photoFaceEmbeddings.photoId))
+      .innerJoin(events, eq(events.id, photos.eventId))
+      .where(eq(events.isActive, true));
     const totalEmbeddings = Number(embeddingsCountResult[0]?.count || 0);
 
     // 4. Processing jobs by status
@@ -49,6 +54,8 @@ export async function GET() {
         count: sql<number>`count(*)`,
       })
       .from(processingJobs)
+      .innerJoin(events, eq(events.id, processingJobs.eventId))
+      .where(eq(events.isActive, true))
       .groupBy(processingJobs.status);
 
     const jobStats = { queued: 0, running: 0, done: 0, error: 0 };
@@ -74,6 +81,8 @@ export async function GET() {
         doneAt: processingJobs.doneAt,
       })
       .from(processingJobs)
+      .innerJoin(events, eq(events.id, processingJobs.eventId))
+      .where(eq(events.isActive, true))
       .orderBy(sql`${processingJobs.createdAt} DESC`)
       .limit(20);
 
@@ -86,6 +95,8 @@ export async function GET() {
         createdAt: photos.createdAt,
       })
       .from(photos)
+      .innerJoin(events, eq(events.id, photos.eventId))
+      .where(eq(events.isActive, true))
       .orderBy(sql`${photos.createdAt} DESC`)
       .limit(10);
 

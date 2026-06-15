@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
-import { db, processingJobs } from "@/lib/db";
-import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -12,15 +12,15 @@ export async function PATCH() {
   }
 
   try {
-    const result = await db
-      .update(processingJobs)
-      .set({
-        status: "queued",
-        errorMsg: null,
-        startedAt: null,
-        doneAt: null,
-      })
-      .where(eq(processingJobs.status, "error"));
+    const result = await db.execute(sql`
+      UPDATE processing_jobs pj
+      SET status = 'queued', error_msg = NULL, started_at = NULL, done_at = NULL
+      WHERE pj.status = 'error'
+        AND EXISTS (
+          SELECT 1 FROM events e
+          WHERE e.id = pj.event_id AND e.is_active = true
+        )
+    `);
 
     return NextResponse.json({ success: true, retried: result.rowCount ?? 0 });
   } catch (error) {

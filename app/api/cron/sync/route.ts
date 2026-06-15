@@ -3,11 +3,11 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 import { createHash, timingSafeEqual } from "crypto";
-import { db, events, photos } from "@/lib/db";
-import { and, eq, isNotNull, sql } from "drizzle-orm";
-import { getNewFilesFromFolder } from "@/lib/drive";
+import { db, events } from "@/lib/db";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { triggerQualityFilter } from "@/lib/pipeline";
 import { NextResponse } from "next/server";
+import { syncEventPhotos } from "@/lib/syncEventPhotos";
 
 export async function GET(req: Request) {
   try {
@@ -57,41 +57,11 @@ export async function GET(req: Request) {
       try {
         console.log(`[CRON] Auto-syncing event ${event.id} (${event.name})`);
         
-        // Fetch new files
-        const newFiles = await getNewFilesFromFolder(
-          event.driveFolderId!,
-          event.lastSyncedAt ?? undefined
-        );
-
-        let toInsert = [...newFiles];
-
-        if (newFiles.length > 0) {
-          // Check existing photos for this event in the database
-          const existing = await db
-            .select({ driveFileId: photos.driveFileId })
-            .from(photos)
-            .where(eq(photos.eventId, event.id));
-          const existingIds = new Set(existing.map((e: { driveFileId: string }) => e.driveFileId));
-          toInsert = newFiles.filter((f) => !existingIds.has(f.driveFileId));
-
-          if (toInsert.length > 0) {
-            // Bulk insert new files as pending
-            await db.insert(photos).values(
-              toInsert.map((f) => ({
-                id: crypto.randomUUID(),
-                eventId: event.id,
-                seasonId: event.seasonId,
-                driveFileId: f.driveFileId,
-                driveUrl: f.driveUrl,
-                downloadUrl: f.downloadUrl,
-                filename: f.filename,
-                fileSize: f.fileSize,
-                status: "pending" as const,
-                createdAt: new Date(),
-              }))
-            );
-          }
-        }
+        const syncResult = await syncEventPhotos({
+          id: event.id,
+          seasonId: event.seasonId,
+          driveFolderId: event.driveFolderId!,
+        });
 
         // Update lastSyncedAt, syncStatus = 'done', photoCount
         await db
@@ -99,7 +69,7 @@ export async function GET(req: Request) {
           .set({
             lastSyncedAt: new Date(),
             syncStatus: "done",
-            photoCount: sql`photo_count + ${toInsert.length}`,
+            photoCount: syncResult.total,
           })
           .where(eq(events.id, event.id));
 
@@ -110,7 +80,11 @@ export async function GET(req: Request) {
           console.error(`[CRON] Quality filter trigger failed for event ${event.id}:`, err);
         }
 
-        results.push({ eventId: event.id, synced: toInsert.length });
+        results.push({
+          eventId: event.id,
+          synced: syncResult.added,
+          removed: syncResult.removed,
+        });
       } catch (err) {
         console.error(`[CRON] Failed to sync event ${event.id}:`, err);
         await db.update(events).set({ syncStatus: "error" }).where(eq(events.id, event.id));

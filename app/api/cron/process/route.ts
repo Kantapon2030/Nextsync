@@ -1,9 +1,10 @@
 // app/api/cron/process/route.ts
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 import { createHash, timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
-import { db, processingJobs, photos } from "@/lib/db";
+import { db, processingJobs, events } from "@/lib/db";
 import { eq, sql, and } from "drizzle-orm";
 import { processPhotoBatch } from "@/lib/pipeline";
 import { getSettingsFromDB } from "@/lib/aiTuner";
@@ -44,31 +45,61 @@ export async function GET(req: Request) {
       );
     console.log(`[CRON] Reset ${stuckResetResult.rowCount ?? 0} stuck jobs back to queued`);
 
+    await db.execute(sql`
+      UPDATE processing_jobs pj
+      SET
+        status = 'error',
+        done_at = NOW(),
+        error_msg = 'Event is inactive or missing'
+      WHERE pj.status IN ('queued', 'running')
+        AND NOT EXISTS (
+          SELECT 1 FROM events e
+          WHERE e.id = pj.event_id AND e.is_active = true
+        )
+    `);
+
     // ── Auto-create missing jobs: photos pending แต่ไม่มี job ──
     const eventsNeedingJobs = await db.execute(sql`
-      SELECT DISTINCT p.event_id
+      SELECT p.event_id, COUNT(*)::int AS pending_count
       FROM photos p
+      INNER JOIN events e ON e.id = p.event_id AND e.is_active = true
       LEFT JOIN processing_jobs pj 
         ON p.event_id = pj.event_id 
         AND pj.status IN ('queued', 'running')
       WHERE p.status = 'pending'
         AND pj.id IS NULL
+      GROUP BY p.event_id
     `);
 
-    for (const row of eventsNeedingJobs.rows as { event_id: string }[]) {
+    for (const row of eventsNeedingJobs.rows as { event_id: string; pending_count: number }[]) {
       await db.insert(processingJobs).values({
         id: crypto.randomUUID(),
         eventId: row.event_id,
         status: "queued",
+        total: Number(row.pending_count),
         createdAt: new Date(),
       });
       console.log(`[CRON] Auto-created missing job for event ${row.event_id}`);
     }
 
+    await db.execute(sql`
+      UPDATE processing_jobs pj
+      SET total = pj.processed + pending.count
+      FROM (
+        SELECT event_id, COUNT(*)::int AS count
+        FROM photos
+        WHERE status = 'pending'
+        GROUP BY event_id
+      ) pending
+      WHERE pj.event_id = pending.event_id
+        AND pj.status IN ('queued', 'running')
+    `);
+
     // 2. Find the oldest queued job
     const job = await db
-      .select()
+      .select({ job: processingJobs })
       .from(processingJobs)
+      .innerJoin(events, and(eq(events.id, processingJobs.eventId), eq(events.isActive, true)))
       .where(eq(processingJobs.status, "queued"))
       .orderBy(processingJobs.createdAt)
       .limit(1);
@@ -77,13 +108,17 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: "No jobs" });
     }
 
-    const currentJob = job[0];
+    const currentJob = job[0].job;
 
     // 3. Mark job as running and record started time
-    await db
+    const claimed = await db
       .update(processingJobs)
       .set({ status: "running", startedAt: new Date() })
-      .where(eq(processingJobs.id, currentJob.id));
+      .where(and(eq(processingJobs.id, currentJob.id), eq(processingJobs.status, "queued")));
+
+    if ((claimed.rowCount ?? 0) === 0) {
+      return NextResponse.json({ message: "Job was claimed by another worker" }, { status: 409 });
+    }
 
     try {
       const settings = await getSettingsFromDB();
@@ -100,6 +135,7 @@ export async function GET(req: Request) {
             status: "done",
             doneAt: new Date(),
             processed: sql`processed + ${processed}`,
+            total: sql`processed + ${processed}`,
           })
           .where(eq(processingJobs.id, currentJob.id));
       } else {
@@ -109,6 +145,7 @@ export async function GET(req: Request) {
           .set({
             status: "queued",
             processed: sql`processed + ${processed}`,
+            total: sql`processed + ${processed} + ${remaining}`,
           })
           .where(eq(processingJobs.id, currentJob.id));
       }

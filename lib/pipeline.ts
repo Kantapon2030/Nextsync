@@ -21,8 +21,13 @@ interface ExtractedFace {
 export async function triggerProcessing(eventId: string): Promise<void> {
   try {
     const insertResult = await db.execute(sql`
-      INSERT INTO processing_jobs (id, event_id, status, created_at)
-      SELECT ${crypto.randomUUID()}, ${eventId}, 'queued', NOW()
+      INSERT INTO processing_jobs (id, event_id, status, total, created_at)
+      SELECT
+        ${crypto.randomUUID()},
+        ${eventId},
+        'queued',
+        (SELECT COUNT(*) FROM photos WHERE event_id = ${eventId} AND status = 'pending'),
+        NOW()
       WHERE NOT EXISTS (
         SELECT 1 FROM processing_jobs 
         WHERE event_id = ${eventId} 
@@ -31,6 +36,16 @@ export async function triggerProcessing(eventId: string): Promise<void> {
     `);
 
     const inserted = (insertResult.rowCount ?? 0) > 0;
+
+    await db.execute(sql`
+      UPDATE processing_jobs
+      SET total = processed + (
+        SELECT COUNT(*) FROM photos
+        WHERE event_id = ${eventId} AND status = 'pending'
+      )
+      WHERE event_id = ${eventId}
+        AND status IN ('queued', 'running')
+    `);
 
     if (inserted) {
       console.log(`[PIPELINE] Queued processing job for event ${eventId}`);
